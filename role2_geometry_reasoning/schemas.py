@@ -8,9 +8,9 @@ from typing import List, Optional, Tuple
 @dataclass
 class VertexInput:
     id: str
-    x: float
-    y: float
-    z: float
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
 
 
 @dataclass
@@ -22,6 +22,8 @@ class CVDataInput:
 
 @dataclass
 class ErrorDetail:
+    missing_vertices: List[str] = field(default_factory=list)
+    extra_vertices: List[str] = field(default_factory=list)
     missing_edges: List[Tuple[str, str]] = field(default_factory=list)
     extra_edges: List[Tuple[str, str]] = field(default_factory=list)
     wrong_connections: List[Tuple[str, str]] = field(default_factory=list)
@@ -30,7 +32,7 @@ class ErrorDetail:
 @dataclass
 class ReasoningResult:
     shape: str
-    status: str
+    status: str  # "valid", "invalid", "incomplete"
     is_correct: bool
     message: str
     details: ErrorDetail
