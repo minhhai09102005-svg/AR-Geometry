@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "C:\\msys64\\ucrt64\\bin\\python.exe",
+  "terminal.integrated.env.windows": {
+    "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+  }
+}
