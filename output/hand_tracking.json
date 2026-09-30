@@ -1,0 +1,22 @@
+{
+    "coordinate_system": "normalized_image",
+    "hands": [
+        {
+            "hand": "Right",
+            "gesture": "OPEN",
+            "thumb_tip": {
+                "x": 0.6025,
+                "y": 0.6274,
+                "pixel_x": 385,
+                "pixel_y": 301
+            },
+            "index_tip": {
+                "x": 0.6596,
+                "y": 0.2856,
+                "pixel_x": 422,
+                "pixel_y": 137
+            },
+            "pinch_ratio": 0.9744
+        }
+    ]
+}
