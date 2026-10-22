@@ -1,1049 +1,628 @@
+
 import cv2
 import mediapipe as mp
 import math
 import json
 import socket
 
-
-# ============================================================
-# SMARTGEOAR - ROLE 1 - WEEK 2
-#
-# Camera
-# -> MediaPipe Hands
-# -> Gesture
-# -> Interaction Point
-# -> Smoothing
-# -> JSON
-# -> UDP
-# -> Unity
-# ============================================================
-
-
-# ============================================================
-# 1. CAMERA CONFIG
-# ============================================================
+# ==========================================================
+# SMARTGEOAR - ROLE 1 / TUAN 4-5
+# Hand tracking + pinch debounce + adaptive smoothing
+# Lost tracking + UDP localhost
+# ==========================================================
 
 CAMERA_INDEX = 0
-
 MAX_HANDS = 2
 
+# ==========================================
+# 1. CAU HINH GESTURE
+# ==========================================
 
-# ============================================================
-# 2. GESTURE CONFIG
-# ============================================================
-
-# Khi ratio nhỏ hơn mức này
-# -> bắt đầu pinch
 PINCH_START_THRESHOLD = 0.40
-
-
-# Khi đang pinch mà ratio lớn hơn mức này
-# -> kết thúc pinch
 PINCH_END_THRESHOLD = 0.55
 
+PINCH_CONFIRM_FRAMES = 2
+RELEASE_CONFIRM_FRAMES = 2
 
-# ============================================================
-# 3. SMOOTHING CONFIG
-# ============================================================
+LOST_FRAMES_TO_RELEASE = 5
 
-# 0.15 -> rất mượt nhưng hơi chậm
-# 0.30 -> cân bằng
-# 0.50 -> nhanh nhưng rung hơn
+# ==========================================
+# 2. CAU HINH SMOOTHING
+# ==========================================
 
-SMOOTHING_ALPHA = 0.30
+SMOOTH_ALPHA_MIN = 0.18
+SMOOTH_ALPHA_MAX = 0.72
 
+MOVE_SCALE = 0.06
+JITTER_DEADZONE = 0.002
 
-# ============================================================
-# 4. UDP CONFIG
-# ============================================================
+# ==========================================
+# 3. CAU HINH UDP LOCAL
+# ==========================================
 
-# Python + Unity chạy cùng laptop
-UDP_HOST = "172.11.203.7"
-
-# Unity sẽ nghe port này
+UDP_HOST = "127.0.0.1"
 UDP_PORT = 5052
 
-
-# ============================================================
-# 5. DEBUG CONFIG
-# ============================================================
-
-# In JSON sau mỗi bao nhiêu frame
-# Camera khoảng 30 FPS
-# 30 = khoảng 1 giây in 1 lần
-
 PRINT_JSON_EVERY_N_FRAMES = 30
+SHOW_RAW_POINT = True
 
-
-# ============================================================
-# 6. MEDIAPIPE
-# ============================================================
+# ==========================================
+# 4. MEDIAPIPE
+# ==========================================
 
 mp_hands = mp.solutions.hands
-
 mp_drawing = mp.solutions.drawing_utils
+mp_styles = mp.solutions.drawing_styles
 
-mp_drawing_styles = mp.solutions.drawing_styles
-
-
-hands = mp_hands.Hands(
-
-    static_image_mode=False,
-
-    max_num_hands=MAX_HANDS,
-
-    min_detection_confidence=0.6,
-
-    min_tracking_confidence=0.6
-)
+hand_states = {}
 
 
-# ============================================================
-# 7. STATE
-# ============================================================
+# ==========================================
+# 5. LUU TRANG THAI TUNG TAY
+# ==========================================
 
-# trạng thái pinch từng tay
+def get_state(hand_name):
 
-pinch_state = {
+    if hand_name not in hand_states:
 
-    "Left": False,
+        hand_states[hand_name] = {
+            "pinching": False,
+            "pinch_frames": 0,
+            "release_frames": 0,
+            "smooth": None,
+            "lost": 0,
+            "last_pos": None,
+            "last_ratio": 0.0
+        }
 
-    "Right": False
-}
-
-
-# lưu vị trí đã smoothing
-
-smooth_position = {
-
-    "Left": None,
-
-    "Right": None
-}
+    return hand_states[hand_name]
 
 
-frame_id = 0
+# ==========================================
+# 6. TINH KHOANG CACH
+# ==========================================
 
+def distance_2d(a, b):
 
-# ============================================================
-# 8. HÀM TÍNH KHOẢNG CÁCH
-# ============================================================
-
-def distance_2d(point1, point2):
-
-    return math.sqrt(
-
-        (point1.x - point2.x) ** 2
-
-        +
-
-        (point1.y - point2.y) ** 2
+    return math.hypot(
+        a.x - b.x,
+        a.y - b.y
     )
 
 
-# ============================================================
-# 9. HÀM XÁC ĐỊNH GESTURE
-# ============================================================
+# ==========================================
+# 7. NHAN DIEN GESTURE
+# ==========================================
 
-def get_gesture(hand_name, pinch_ratio):
+def get_gesture(state, ratio):
 
-    # Lấy trạng thái trước đó
+    # Chua pinch
+    if not state["pinching"]:
 
-    was_pinching = pinch_state.get(
+        state["release_frames"] = 0
 
-        hand_name,
+        if ratio < PINCH_START_THRESHOLD:
+            state["pinch_frames"] += 1
+        else:
+            state["pinch_frames"] = 0
 
-        False
-    )
+        # Xac nhan nhieu frame
+        if state["pinch_frames"] >= PINCH_CONFIRM_FRAMES:
 
-
-    # ========================================================
-    # TRƯỜNG HỢP 1
-    # Trước đó chưa pinch
-    # ========================================================
-
-    if not was_pinching:
-
-
-        # Hai ngón đủ gần nhau
-        # -> bắt đầu pinch
-
-        if pinch_ratio < PINCH_START_THRESHOLD:
-
-            pinch_state[hand_name] = True
+            state["pinching"] = True
+            state["pinch_frames"] = 0
 
             return "PINCH_START"
 
-
-        # Chưa pinch
-
         return "OPEN"
 
+    # Dang pinch
+    state["pinch_frames"] = 0
 
-    # ========================================================
-    # TRƯỜNG HỢP 2
-    # Trước đó đang pinch
-    # ========================================================
-
+    if ratio > PINCH_END_THRESHOLD:
+        state["release_frames"] += 1
     else:
+        state["release_frames"] = 0
+
+    # Xac nhan tha tay
+    if state["release_frames"] >= RELEASE_CONFIRM_FRAMES:
+
+        state["pinching"] = False
+        state["release_frames"] = 0
+
+        return "PINCH_END"
+
+    return "PINCH_HOLD"
 
 
-        # Hai ngón đã tách ra đủ xa
-        # -> kết thúc pinch
+# ==========================================
+# 8. ADAPTIVE SMOOTHING
+# ==========================================
 
-        if pinch_ratio > PINCH_END_THRESHOLD:
+def smooth_point(state, x, y):
 
-            pinch_state[hand_name] = False
+    prev = state["smooth"]
 
-            return "PINCH_END"
+    # Frame dau tien
+    if prev is None:
 
+        state["smooth"] = (x, y)
+        return x, y
 
-        # Vẫn đang giữ pinch
-
-        return "PINCH_HOLD"
-
-
-# ============================================================
-# 10. HÀM SMOOTH TỌA ĐỘ
-# ============================================================
-
-def smooth_point(hand_name, current_x, current_y):
-
-    previous = smooth_position.get(
-
-        hand_name
+    # Khoang cach tu vi tri cu
+    distance = math.hypot(
+        x - prev[0],
+        y - prev[1]
     )
 
+    # Toc do di chuyen tuong doi
+    speed_factor = min(
+        1.0,
+        distance / MOVE_SCALE
+    )
 
-    # ========================================================
-    # Frame đầu tiên
-    # ========================================================
+    # Tu dong thay doi alpha
+    alpha = (
+        SMOOTH_ALPHA_MIN
+        +
+        (SMOOTH_ALPHA_MAX - SMOOTH_ALPHA_MIN)
+        * speed_factor
+    )
 
-    if previous is None:
+    # Tinh toa do sau khi loc
+    sx = prev[0] + alpha * (x - prev[0])
+    sy = prev[1] + alpha * (y - prev[1])
 
-        smooth_x = current_x
+    # Bo qua rung nho
+    if math.hypot(
+        sx - prev[0],
+        sy - prev[1]
+    ) < JITTER_DEADZONE:
 
-        smooth_y = current_y
+        return prev
 
+    state["smooth"] = (sx, sy)
 
-    # ========================================================
-    # Các frame tiếp theo
-    # ========================================================
-
-    else:
-
-        smooth_x = (
-
-            previous["x"]
-
-            *
-
-            (1 - SMOOTHING_ALPHA)
-
-            +
-
-            current_x
-
-            *
-
-            SMOOTHING_ALPHA
-        )
+    return sx, sy
 
 
-        smooth_y = (
+# ==========================================
+# 9. TAO HAND JSON
+# ==========================================
 
-            previous["y"]
+def make_hand_data(
+    hand_name,
+    gesture,
+    x,
+    y,
+    ratio
+):
 
-            *
-
-            (1 - SMOOTHING_ALPHA)
-
-            +
-
-            current_y
-
-            *
-
-            SMOOTHING_ALPHA
-        )
-
-
-    # Lưu lại
-
-    smooth_position[hand_name] = {
-
-        "x": smooth_x,
-
-        "y": smooth_y
+    return {
+        "hand": hand_name,
+        "gesture": gesture,
+        "interaction": {
+            "x": round(float(x), 4),
+            "y": round(float(y), 4)
+        },
+        "pinch_ratio": round(float(ratio), 4)
     }
 
 
-    return smooth_x, smooth_y
-
-
-# ============================================================
-# 11. TẠO UDP SOCKET
-# ============================================================
-
-udp_socket = socket.socket(
-
-    socket.AF_INET,
-
-    socket.SOCK_DGRAM
-)
-
-
-# ============================================================
-# 12. MỞ CAMERA
-# ============================================================
-
-cap = cv2.VideoCapture(
-
-    CAMERA_INDEX,
-
-    cv2.CAP_DSHOW
-)
-
-
-if not cap.isOpened():
-
-    print("ERROR: Không mở được camera")
-
-    raise SystemExit
-
-
-print()
-
-print("============================================")
-
-print("SMARTGEOAR - ROLE 1 - WEEK 2")
-
-print("============================================")
-
-print()
-
-print(
-    f"UDP destination: {UDP_HOST}:{UDP_PORT}"
-)
-
-print()
-
-print(
-    "Q = Quit"
-)
-
-print()
-
-print("============================================")
-
-print()
-
-
-# ============================================================
-# 13. MAIN LOOP
-# ============================================================
-
-while True:
-
-
-    # ========================================================
-    # 14. ĐỌC CAMERA
-    # ========================================================
-
-    ret, frame = cap.read()
-
-
-    if not ret:
-
-        print("ERROR: Không đọc được frame")
-
-        break
-
-
-    # Flip camera dạng gương
-
-    frame = cv2.flip(
-
-        frame,
-
-        1
-    )
-
-
-    height, width, _ = frame.shape
-
-
-    # ========================================================
-    # 15. BGR -> RGB
-    # ========================================================
-
-    rgb = cv2.cvtColor(
-
-        frame,
-
-        cv2.COLOR_BGR2RGB
-    )
-
-
-    # ========================================================
-    # 16. HAND TRACKING
-    # ========================================================
-
-    results = hands.process(
-
-        rgb
-    )
-
-
-    # Danh sách tay trong frame này
-
-    detected_hands = []
-
-
-    # ========================================================
-    # 17. NẾU CÓ TAY
-    # ========================================================
-
-    if results.multi_hand_landmarks:
-
-
-        for i, hand_landmarks in enumerate(
-
-            results.multi_hand_landmarks
-        ):
-
-
-            # =================================================
-            # 18. XÁC ĐỊNH LEFT / RIGHT
-            # =================================================
-
-            if results.multi_handedness:
-
-
-                classification = (
-
-                    results
-
-                    .multi_handedness[i]
-
-                    .classification[0]
-                )
-
-
-                hand_name = classification.label
-
-
-            else:
-
-                hand_name = "Unknown"
-
-
-            # =================================================
-            # 19. LẤY LANDMARK
-            # =================================================
-
-            thumb_tip = hand_landmarks.landmark[
-
-                mp_hands.HandLandmark.THUMB_TIP
-            ]
-
-
-            index_tip = hand_landmarks.landmark[
-
-                mp_hands.HandLandmark.INDEX_FINGER_TIP
-            ]
-
-
-            wrist = hand_landmarks.landmark[
-
-                mp_hands.HandLandmark.WRIST
-            ]
-
-
-            middle_mcp = hand_landmarks.landmark[
-
-                mp_hands.HandLandmark.MIDDLE_FINGER_MCP
-            ]
-
-
-            # =================================================
-            # 20. TÍNH KHOẢNG CÁCH NGÓN CÁI - NGÓN TRỎ
-            # =================================================
-
-            finger_distance = distance_2d(
-
-                thumb_tip,
-
-                index_tip
-            )
-
-
-            # =================================================
-            # 21. TÍNH KÍCH THƯỚC BÀN TAY
-            # =================================================
-
-            palm_size = distance_2d(
-
-                wrist,
-
-                middle_mcp
-            )
-
-
-            # =================================================
-            # 22. PINCH RATIO
-            # =================================================
-
-            if palm_size > 0:
-
-                pinch_ratio = (
-
-                    finger_distance
-
-                    /
-
-                    palm_size
-                )
-
-
-            else:
-
-                pinch_ratio = 999
-
-
-            # =================================================
-            # 23. GESTURE
-            # =================================================
-
-            gesture = get_gesture(
-
-                hand_name,
-
-                pinch_ratio
-            )
-
-
-            # =================================================
-            # 24. INTERACTION POINT
-            #
-            # trung điểm:
-            #
-            # thumb_tip + index_tip
-            # =================================================
-
-            raw_x = (
-
-                thumb_tip.x
-
-                +
-
-                index_tip.x
-
-            ) / 2
-
-
-            raw_y = (
-
-                thumb_tip.y
-
-                +
-
-                index_tip.y
-
-            ) / 2
-
-
-            # =================================================
-            # 25. GIỚI HẠN TỌA ĐỘ 0 -> 1
-            # =================================================
-
-            raw_x = max(
-
-                0.0,
-
-                min(
-
-                    1.0,
-
-                    raw_x
-                )
-            )
-
-
-            raw_y = max(
-
-                0.0,
-
-                min(
-
-                    1.0,
-
-                    raw_y
-                )
-            )
-
-
-            # =================================================
-            # 26. SMOOTH TỌA ĐỘ
-            # =================================================
-
-            interaction_x, interaction_y = smooth_point(
-
-                hand_name,
-
-                raw_x,
-
-                raw_y
-            )
-
-
-            # =================================================
-            # 27. CHUYỂN TỌA ĐỘ NORMALIZED -> PIXEL
-            #
-            # chỉ dùng để vẽ debug
-            # =================================================
-
-            pixel_x = int(
-
-                interaction_x
-
-                *
-
-                width
-            )
-
-
-            pixel_y = int(
-
-                interaction_y
-
-                *
-
-                height
-            )
-
-
-            # =================================================
-            # 28. TẠO DATA CỦA 1 TAY
-            # =================================================
-
-            hand_data = {
-
-
-                "hand":
-
-                    hand_name,
-
-
-                "gesture":
-
-                    gesture,
-
-
-                "interaction": {
-
-
-                    "x":
-
-                        round(
-
-                            float(interaction_x),
-
-                            4
-                        ),
-
-
-                    "y":
-
-                        round(
-
-                            float(interaction_y),
-
-                            4
-                        )
-                },
-
-
-                "pinch_ratio":
-
-                    round(
-
-                        float(pinch_ratio),
-
-                        4
+# ==========================================
+# 10. XU LY MAT TRACKING
+# ==========================================
+
+def handle_missing_hands(
+    seen_hands,
+    detected_hands,
+    frame_id
+):
+
+    for hand_name, state in hand_states.items():
+
+        # Tay van duoc nhan dien
+        if hand_name in seen_hands:
+            continue
+
+        # Da xu ly mat tracking
+        if state["lost"] >= LOST_FRAMES_TO_RELEASE:
+            continue
+
+        state["lost"] += 1
+
+        # Mat tay du 5 frame
+        if state["lost"] == LOST_FRAMES_TO_RELEASE:
+
+            if (
+                state["pinching"]
+                and state["last_pos"] is not None
+            ):
+
+                x, y = state["last_pos"]
+
+                # Gui PINCH_END ve Unity
+                detected_hands.append(
+                    make_hand_data(
+                        hand_name,
+                        "PINCH_END",
+                        x,
+                        y,
+                        state["last_ratio"]
                     )
-            }
-
-
-            # Thêm vào danh sách
-
-            detected_hands.append(
-
-                hand_data
-            )
-
-
-            # =================================================
-            # 29. VẼ LANDMARK
-            # =================================================
-
-            mp_drawing.draw_landmarks(
-
-                frame,
-
-                hand_landmarks,
-
-                mp_hands.HAND_CONNECTIONS,
-
-                mp_drawing_styles
-                .get_default_hand_landmarks_style(),
-
-                mp_drawing_styles
-                .get_default_hand_connections_style()
-            )
-
-
-            # =================================================
-            # 30. CHỌN MÀU GESTURE
-            # =================================================
-
-            if gesture == "PINCH_START":
-
-                color = (
-
-                    0,
-
-                    255,
-
-                    0
                 )
 
-
-            elif gesture == "PINCH_HOLD":
-
-                color = (
-
-                    0,
-
-                    255,
-
-                    255
+                print(
+                    f"Frame {frame_id} | "
+                    f"{hand_name} | "
+                    "PINCH_END (TRACKING LOST)"
                 )
 
-
-            elif gesture == "PINCH_END":
-
-                color = (
-
-                    255,
-
-                    0,
-
-                    255
-                )
-
-
-            else:
-
-                color = (
-
-                    0,
-
-                    0,
-
-                    255
-                )
-
-
-            # =================================================
-            # 31. VẼ INTERACTION POINT
-            # =================================================
-
-            cv2.circle(
-
-                frame,
-
-                (
-                    pixel_x,
-
-                    pixel_y
-                ),
-
-                12,
-
-                color,
-
-                3
-            )
-
-
-            # =================================================
-            # 32. HIỂN THỊ GESTURE
-            # =================================================
-
-            cv2.putText(
-
-                frame,
-
-                f"{hand_name}: {gesture}",
-
-                (
-                    20,
-
-                    40 + i * 40
-                ),
-
-                cv2.FONT_HERSHEY_SIMPLEX,
-
-                0.7,
-
-                color,
-
-                2
-            )
-
-
-            # =================================================
-            # 33. HIỂN THỊ PINCH RATIO
-            # =================================================
-
-            cv2.putText(
-
-                frame,
-
-                f"ratio: {pinch_ratio:.2f}",
-
-                (
-                    20,
-
-                    65 + i * 40
-                ),
-
-                cv2.FONT_HERSHEY_SIMPLEX,
-
-                0.45,
-
-                color,
-
-                1
-            )
-
-
-    # ========================================================
-    # 34. TẠO PACKET JSON
-    # ========================================================
-
-    packet = {
-
-
-        "version":
-
-            "1.0",
-
-
-        "source":
-
-            "role1_hand_tracking",
-
-
-        "frame_id":
-
-            frame_id,
-
-
-        "coordinate_system":
-
-            "normalized_image",
-
-
-        "hands":
-
-            detected_hands
-    }
-
-
-    # ========================================================
-    # 35. IN JSON RA TERMINAL
-    #
-    # khoảng 1 giây / lần
-    # ========================================================
-
-    if frame_id % PRINT_JSON_EVERY_N_FRAMES == 0:
-
-
-        print(
-
-            json.dumps(
-
-                packet,
-
-                indent=4,
-
-                ensure_ascii=False
-            )
-        )
-
-
-        print(
-
-            "--------------------------------------------"
-        )
-
-
-    # ========================================================
-    # 36. JSON -> BYTES
-    # ========================================================
-
-    message = json.dumps(
-
-        packet,
-
-        ensure_ascii=False
-
-    ).encode(
-
-        "utf-8"
+            # Reset trang thai
+            state["pinching"] = False
+            state["pinch_frames"] = 0
+            state["release_frames"] = 0
+            state["smooth"] = None
+
+
+# ==========================================
+# 11. MAIN
+# ==========================================
+
+def main():
+
+    tracker = mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=MAX_HANDS,
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6
     )
 
+    cap = cv2.VideoCapture(
+        CAMERA_INDEX,
+        cv2.CAP_DSHOW
+    )
 
-    # ========================================================
-    # 37. SEND UDP
-    # ========================================================
+    udp_socket = socket.socket(
+        socket.AF_INET,
+        socket.SOCK_DGRAM
+    )
 
     try:
 
+        if not cap.isOpened():
 
-        udp_socket.sendto(
-
-            message,
-
-            (
-
-                UDP_HOST,
-
-                UDP_PORT
+            print(
+                "Khong mo duoc camera. "
+                "Kiem tra CAMERA_INDEX."
             )
-        )
 
-
-    except OSError as error:
-
+            return
 
         print(
-
-            "UDP ERROR:",
-
-            error
+            f"ROLE 1 -> UNITY: "
+            f"UDP {UDP_HOST}:{UDP_PORT}"
         )
 
+        print("Q: Quit")
 
-    # ========================================================
-    # 38. HIỂN THỊ UDP STATUS
-    # ========================================================
+        frame_id = 0
 
-    cv2.putText(
+        # ==================================
+        # MAIN LOOP
+        # ==================================
 
-        frame,
+        while True:
 
-        f"UDP -> {UDP_HOST}:{UDP_PORT}",
+            ok, frame = cap.read()
 
-        (
+            if not ok:
 
-            20,
+                print("Khong doc duoc frame")
+                break
 
-            height - 45
-        ),
+            # Lat camera
+            frame = cv2.flip(frame, 1)
 
-        cv2.FONT_HERSHEY_SIMPLEX,
+            height, width = frame.shape[:2]
 
-        0.5,
+            # BGR -> RGB
+            rgb = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
 
-        (
+            # Nhan dien tay
+            results = tracker.process(rgb)
 
-            255,
+            detected_hands = []
+            seen_hands = set()
 
-            255,
+            # ==================================
+            # 12. XU LY TAY DUOC PHAT HIEN
+            # ==================================
 
-            255
-        ),
+            if results.multi_hand_landmarks:
 
-        1
-    )
+                for i, landmarks in enumerate(
+                    results.multi_hand_landmarks
+                ):
+
+                    # Xac dinh tay trai/phai
+                    if (
+                        results.multi_handedness
+                        and
+                        i < len(results.multi_handedness)
+                    ):
+
+                        hand_name = (
+                            results
+                            .multi_handedness[i]
+                            .classification[0]
+                            .label
+                        )
+
+                    else:
+                        hand_name = "Unknown"
+
+                    # Lay state
+                    state = get_state(hand_name)
+
+                    state["lost"] = 0
+                    seen_hands.add(hand_name)
+
+                    # Lay landmark
+                    thumb = landmarks.landmark[
+                        mp_hands.HandLandmark.THUMB_TIP
+                    ]
+
+                    index = landmarks.landmark[
+                        mp_hands.HandLandmark.INDEX_FINGER_TIP
+                    ]
+
+                    wrist = landmarks.landmark[
+                        mp_hands.HandLandmark.WRIST
+                    ]
+
+                    middle = landmarks.landmark[
+                        mp_hands.HandLandmark.MIDDLE_FINGER_MCP
+                    ]
+
+                    # ==================================
+                    # 13. TINH PINCH RATIO
+                    # ==================================
+
+                    palm_size = distance_2d(
+                        wrist,
+                        middle
+                    )
+
+                    if palm_size > 1e-6:
+
+                        ratio = (
+                            distance_2d(thumb, index)
+                            /
+                            palm_size
+                        )
+
+                    else:
+                        ratio = 999.0
+
+                    # ==================================
+                    # 14. NHAN DIEN GESTURE
+                    # ==================================
+
+                    gesture = get_gesture(
+                        state,
+                        ratio
+                    )
+
+                    # ==================================
+                    # 15. TOA DO GOC
+                    # ==================================
+
+                    raw_x = (
+                        thumb.x + index.x
+                    ) / 2
+
+                    raw_y = (
+                        thumb.y + index.y
+                    ) / 2
+
+                    raw_x = max(
+                        0.0,
+                        min(1.0, raw_x)
+                    )
+
+                    raw_y = max(
+                        0.0,
+                        min(1.0, raw_y)
+                    )
+
+                    # ==================================
+                    # 16. LAM MUOT TOA DO
+                    # ==================================
+
+                    x, y = smooth_point(
+                        state,
+                        raw_x,
+                        raw_y
+                    )
+
+                    state["last_pos"] = (x, y)
+                    state["last_ratio"] = ratio
+
+                    # ==================================
+                    # 17. TAO HAND DATA
+                    # ==================================
+
+                    detected_hands.append(
+                        make_hand_data(
+                            hand_name,
+                            gesture,
+                            x,
+                            y,
+                            ratio
+                        )
+                    )
+
+                    # Log khi pinch/thả
+                    if gesture in (
+                        "PINCH_START",
+                        "PINCH_END"
+                    ):
+
+                        print(
+                            f"Frame {frame_id} | "
+                            f"{hand_name} | "
+                            f"{gesture} | "
+                            f"ratio={ratio:.2f}"
+                        )
+
+                    # ==================================
+                    # 18. VE LANDMARK
+                    # ==================================
+
+                    mp_drawing.draw_landmarks(
+                        frame,
+                        landmarks,
+                        mp_hands.HAND_CONNECTIONS,
+                        mp_styles.get_default_hand_landmarks_style(),
+                        mp_styles.get_default_hand_connections_style()
+                    )
+
+                    px = int(x * width)
+                    py = int(y * height)
+
+                    # Diem goc mau do
+                    if SHOW_RAW_POINT:
+
+                        cv2.circle(
+                            frame,
+                            (
+                                int(raw_x * width),
+                                int(raw_y * height)
+                            ),
+                            5,
+                            (0, 0, 255),
+                            -1
+                        )
+
+                    # Diem sau smoothing
+                    if state["pinching"]:
+                        color = (0, 255, 0)
+                    else:
+                        color = (255, 255, 0)
+
+                    cv2.circle(
+                        frame,
+                        (px, py),
+                        11,
+                        color,
+                        2
+                    )
+
+                    # Hien thi gesture
+                    cv2.putText(
+                        frame,
+                        f"{hand_name}: "
+                        f"{gesture} ({ratio:.2f})",
+                        (20, 40 + i * 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65,
+                        color,
+                        2
+                    )
+
+            # ==================================
+            # 19. XU LY MAT TRACKING
+            # ==================================
+
+            handle_missing_hands(
+                seen_hands,
+                detected_hands,
+                frame_id
+            )
+
+            # ==================================
+            # 20. TAO JSON PACKET
+            # ==================================
+
+            packet = {
+                "version": "1.0",
+                "source": "role1_hand_tracking",
+                "frame_id": frame_id,
+                "coordinate_system": "normalized_image",
+                "hands": detected_hands
+            }
+
+            # ==================================
+            # 21. GUI JSON SANG UNITY
+            # ==================================
+
+            try:
+
+                message = json.dumps(
+                    packet,
+                    ensure_ascii=False
+                ).encode("utf-8")
+
+                udp_socket.sendto(
+                    message,
+                    (UDP_HOST, UDP_PORT)
+                )
+
+            except OSError as error:
+
+                print("UDP ERROR:", error)
+
+            # In JSON debug
+            if frame_id % PRINT_JSON_EVERY_N_FRAMES == 0:
+
+                print(
+                    json.dumps(
+                        packet,
+                        ensure_ascii=False,
+                        indent=2
+                    )
+                )
+
+            # ==================================
+            # 22. HIEN THI CAMERA
+            # ==================================
+
+            cv2.putText(
+                frame,
+                "RAW: red | "
+                "FILTERED: yellow/green | "
+                "Q: Quit",
+                (20, height - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                1
+            )
+
+            cv2.imshow(
+                "SmartGeoAR - Role 1",
+                frame
+            )
+
+            frame_id += 1
+
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord("q"):
+                break
+
+    finally:
+
+        cap.release()
+        tracker.close()
+        udp_socket.close()
+
+        cv2.destroyAllWindows()
 
 
-    # ========================================================
-    # 39. HƯỚNG DẪN QUIT
-    # ========================================================
-
-    cv2.putText(
-
-        frame,
-
-        "Q: Quit",
-
-        (
-
-            20,
-
-            height - 20
-        ),
-
-        cv2.FONT_HERSHEY_SIMPLEX,
-
-        0.5,
-
-        (
-
-            255,
-
-            255,
-
-            255
-        ),
-
-        1
-    )
-
-
-    # ========================================================
-    # 40. SHOW CAMERA
-    # ========================================================
-
-    cv2.imshow(
-
-        "SmartGeoAR - Role 1 Week 2",
-
-        frame
-    )
-
-
-    # ========================================================
-    # 41. FRAME ID
-    # ========================================================
-
-    frame_id += 1
-
-
-    # ========================================================
-    # 42. KEYBOARD
-    # ========================================================
-
-    key = cv2.waitKey(1) & 0xFF
-
-
-    if key == ord("q"):
-
-        break
-
-
-# ============================================================
-# 43. CLEANUP
-# ============================================================
-
-cap.release()
-
-hands.close()
-
-udp_socket.close()
-
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    main()
