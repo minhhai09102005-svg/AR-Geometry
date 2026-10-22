@@ -8,4 +8,5 @@ public enum ShapeType
 public static class GameSession
 {
     public static ShapeType SelectedShape = ShapeType.Cube;
+    public static bool ReturnToShapeSelection = false;
 }

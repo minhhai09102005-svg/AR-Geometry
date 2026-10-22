@@ -14,7 +14,8 @@ public class ScanScreenController : MonoBehaviour
 
     [Header("Detection")]
     [SerializeField] private MockDetectionProvider mockDetection;
-
+    [SerializeField] private MockVertexOverlay mockVertexOverlay;
+    [SerializeField] private MockEdgeOverlay mockEdgeOverlay;
     private int expectedVertices;
     private int expectedEdges;
 
@@ -96,35 +97,45 @@ public class ScanScreenController : MonoBehaviour
     {
         isScanning = true;
 
-        scanButtonText.text =
-            "DỪNG QUÉT";
-
-        guideText.text =
-            "Giữ mô hình ổn định";
-
-        statusText.text =
-            "Trạng thái: Đang khởi động...";
+        scanButtonText.text = "DỪNG QUÉT";
+        guideText.text = "Giữ mô hình ổn định";
 
         mockDetection.StartMockDetection(
             expectedVertices,
             expectedEdges
         );
-    }
 
+        if (mockVertexOverlay != null)
+        {
+            mockVertexOverlay.StartMockVertices(
+                expectedVertices
+            );
+        }
+
+        if (mockEdgeOverlay != null)
+        {
+            if (GameSession.SelectedShape == ShapeType.Cube)
+            {
+                mockEdgeOverlay.DrawCube();
+            }
+        }
+    }
     private void StopScan()
     {
         isScanning = false;
 
-        mockDetection.StopMockDetection();
+        if (mockDetection != null)
+            mockDetection.StopMockDetection();
 
-        statusText.text =
-            "Trạng thái: Đã dừng quét";
+        if (mockVertexOverlay != null)
+            mockVertexOverlay.StopMockVertices();
 
-        guideText.text =
-            "Đưa mô hình vào trong khung hình";
+        if (mockEdgeOverlay != null)
+            mockEdgeOverlay.ClearEdges();
 
-        scanButtonText.text =
-            "BẮT ĐẦU QUÉT";
+        statusText.text = "Trạng thái: Đã dừng quét";
+        scanButtonText.text = "BẮT ĐẦU QUÉT";
+        guideText.text = "Đưa mô hình vào trong khung hình";
     }
 
     private void UpdateDetectionUI(
@@ -157,7 +168,21 @@ public class ScanScreenController : MonoBehaviour
     public void BackToMenu()
     {
         if (mockDetection != null)
+        {
             mockDetection.StopMockDetection();
+        }
+
+        if (mockVertexOverlay != null)
+        {
+            mockVertexOverlay.StopMockVertices();
+        }
+
+        if (mockEdgeOverlay != null)
+        {
+            mockEdgeOverlay.ClearEdges();
+        }
+
+        GameSession.ReturnToShapeSelection = true;
 
         SceneManager.LoadScene("MainMenu");
     }

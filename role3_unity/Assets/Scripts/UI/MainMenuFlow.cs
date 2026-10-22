@@ -15,7 +15,16 @@ public class MainMenuFlow : MonoBehaviour
 
     private void Start()
     {
-        ShowHome();
+        if (GameSession.ReturnToShapeSelection)
+        {
+            GameSession.ReturnToShapeSelection = false;
+
+            ShowShapeSelection();
+        }
+        else
+        {
+            ShowHome();
+        }
     }
 
     public void ShowHome()
