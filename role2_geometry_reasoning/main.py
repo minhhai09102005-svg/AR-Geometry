@@ -119,12 +119,15 @@ def run_demo():
         # 2. Tạo dữ liệu giả lập (Mock Data) hỗ trợ cả tọa độ 3D (nếu có)
         coords = scenario.get("3d_coords", {})
         vertices_input = []
-        for v in scenario["vertices"]:
+        # Với kịch bản có tọa độ 3D, dùng khóa tọa độ làm danh sách đỉnh nếu chưa khai báo riêng.
+        detected_vertex_ids = scenario.get("vertices", list(coords))
+        for v in detected_vertex_ids:
             x, y, z = coords.get(v, (0.0, 0.0, 0.0))
             vertices_input.append(VertexInput(id=v, x=x, y=y, z=z))
 
         mock_input = CVDataInput(
             timestamp=time.time(),
+            frame_id=int(key),
             vertices=vertices_input,
             detected_edges=scenario["edges"],
         )

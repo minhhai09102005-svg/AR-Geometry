@@ -1,6 +1,7 @@
 """Bộ máy suy luận hình học: so khớp đồ thị G=(V,E), kiểm tra 3D và sinh phản hồi AR."""
 
 import inspect
+import json
 import math
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -24,7 +25,7 @@ class GeometryReasoningEngine:
 
     def __init__(
         self,
-        target_shape: str = "cube",
+        target_shape: str = "auto",
         auto_detect_shape: bool = False,
         enable_3d_validation: bool = True,
         enable_smoothing: bool = False,
@@ -186,7 +187,7 @@ class GeometryReasoningEngine:
         missing_edges: List[Tuple[str, str]],
         extra_edges: List[Tuple[str, str]],
         degrees: Dict[str, int],
-    ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    ) -> Tuple[List[Tuple[Optional[Tuple[str, str]], Tuple[str, str]]], List[Tuple[str, str]]]:
         """
         [Hạng mục 5 - Tuần 5 & 6] Phân tích các cạnh nằm ngoài danh sách chuẩn:
         - Một cạnh bị coi là `wrong_connection` (nối sai) nếu:
@@ -204,7 +205,7 @@ class GeometryReasoningEngine:
         face_diags = set(getattr(knowledge, "face_diagonals", []))
         space_diags = set(getattr(knowledge, "space_diagonals", []))
 
-        wrong_connections: List[Tuple[str, str]] = []
+        wrong_connections: List[Tuple[Optional[Tuple[str, str]], Tuple[str, str]]] = []
         pure_extra_edges: List[Tuple[str, str]] = []
 
         for u, v in extra_edges:
@@ -219,7 +220,20 @@ class GeometryReasoningEngine:
             )
 
             if is_invalid_vertex or is_replacing_missing_edge:
-                wrong_connections.append((u, v))
+                # Chỉ ghép được cạnh bị thay thế khi đầu còn lại của cạnh lạ bị thừa bậc.
+                # Nếu không có bằng chứng rõ, để cạnh chuẩn là None thay vì đoán bừa.
+                replacement = next(
+                    (
+                        expected
+                        for expected in missing_edges
+                        if (
+                            (u in expected and degrees.get(v, 0) > knowledge.expected_degrees.get(v, 3))
+                            or (v in expected and degrees.get(u, 0) > knowledge.expected_degrees.get(u, 3))
+                        )
+                    ),
+                    None,
+                )
+                wrong_connections.append((replacement, (u, v)))
             else:
                 pure_extra_edges.append((u, v))
 
@@ -347,14 +361,14 @@ class GeometryReasoningEngine:
         surface_area = 0.0
         volume = 0.0
         if knowledge.shape_name == "cube":
-            surface_area = round(6.0 * (mean_length ** 2), 4)
-            volume = round(mean_length ** 3, 4)
+            surface_area = round(6.0 * (mean_length ** 2), 8)
+            volume = round(mean_length ** 3, 8)
         elif knowledge.shape_name == "rectangular_prism":
             a = group_means.get("length", mean_length)
             b = group_means.get("width", mean_length)
             c = group_means.get("height", mean_length)
-            surface_area = round(2.0 * (a * b + b * c + c * a), 4)
-            volume = round(a * b * c, 4)
+            surface_area = round(2.0 * (a * b + b * c + c * a), 8)
+            volume = round(a * b * c, 8)
         elif knowledge.shape_name == "square_pyramid":
             a = group_means.get("base", mean_length)
             b = group_means.get("lateral", mean_length)
@@ -362,8 +376,8 @@ class GeometryReasoningEngine:
             slant_height = math.sqrt(max(0.0, b * b - (a / 2.0) ** 2))
             lateral_area = 2.0 * a * slant_height
             height = math.sqrt(max(0.0, b * b - (a * a) / 2.0))
-            surface_area = round(base_area + lateral_area, 4)
-            volume = round((1.0 / 3.0) * base_area * height, 4)
+            surface_area = round(base_area + lateral_area, 8)
+            volume = round((1.0 / 3.0) * base_area * height, 8)
 
         return {
             "edge_lengths": edge_lengths,
@@ -374,6 +388,8 @@ class GeometryReasoningEngine:
             "non_orthogonal_corners": non_orthogonal_corners,
             "surface_area": surface_area,
             "volume": volume,
+            # Gửi kèm công thức để giao diện có thể giải thích kết quả học tập.
+            "formulas": dict(getattr(knowledge, "formulas", {})),
         }
 
     # ==========================================================================
@@ -400,6 +416,11 @@ class GeometryReasoningEngine:
 
     def process(self, cv_input: CVDataInput) -> ReasoningResult:
         """Phân tích dữ liệu đỉnh/cạnh từ CV và trả về kết quả suy luận cho Unity AR."""
+        # Dùng một hàm dựng chung để mọi phản hồi đều mang đúng mã khung hình CV.
+        def build_result(**kwargs: Any) -> ReasoningResult:
+            kwargs.setdefault("frame_id", getattr(cv_input, "frame_id", 0))
+            return self._build_reasoning_result(**kwargs)
+
         initial_shape_hint = self.knowledge.shape_name if self.knowledge else getattr(cv_input, "target_shape", None)
         vertex_map, detected_edges = self._preprocess_cv_input(cv_input, initial_shape_hint)
 
@@ -407,11 +428,11 @@ class GeometryReasoningEngine:
         if self.auto_detect_shape or self.knowledge is None:
             detected_shape, confidence = self.identify_shape(vertex_map, detected_edges)
             if detected_shape == "unknown":
-                return self._build_reasoning_result(
+                return build_result(
                     shape="unknown",
                     status="incomplete",
                     is_correct=False,
-                    error_type="incomplete",
+                    error_type="unknown_shape",
                     confidence=confidence,
                     message="Chưa nhận diện được loại hình học. Hãy đưa camera lại gần để thấy rõ các đỉnh và cạnh.",
                     details=self._build_error_detail(),
@@ -459,7 +480,14 @@ class GeometryReasoningEngine:
 
         missing_edges_str = ", ".join(self._format_edge(e) for e in missing_edges)
         extra_edges_str = ", ".join(self._format_edge(e) for e in extra_edges)
-        wrong_conn_str = ", ".join(self._format_edge(e) for e in (wrong_connections or extra_edges))
+        wrong_conn_str = ", ".join(
+            (
+                f"{self._format_edge(expected)} thay bằng {self._format_edge(actual)}"
+                if expected is not None
+                else f"cạnh nối sai {self._format_edge(actual)}"
+            )
+            for expected, actual in wrong_connections
+        ) or ", ".join(self._format_edge(e) for e in extra_edges)
         shape_label = getattr(active_knowledge, "display_name", active_knowledge.shape_name)
 
         # ----------------------------------------------------------------------
@@ -470,11 +498,11 @@ class GeometryReasoningEngine:
             if metrics and (not metrics.get("is_orthogonal", True) or not metrics.get("is_edges_equal", True)):
                 geo_issues = metrics.get("length_warnings", []) + metrics.get("non_orthogonal_corners", [])
                 issue_summary = "; ".join(geo_issues[:2])
-                return self._build_reasoning_result(
+                return build_result(
                     shape=active_knowledge.shape_name,
                     status="invalid",
                     is_correct=False,
-                    error_type="geometry_distortion",
+                    error_type="geometry_mismatch",
                     confidence=confidence,
                     message=f"Đã nối đủ cạnh của {shape_label} nhưng kích thước/góc bị lệch: {issue_summary}.",
                     details=self._build_error_detail(
@@ -491,7 +519,7 @@ class GeometryReasoningEngine:
                     f"(Cạnh TB: {metrics['mean_edge_length']}, S_tp: {metrics['surface_area']}, V: {metrics['volume']})."
                 )
 
-            return self._build_reasoning_result(
+            return build_result(
                 shape=active_knowledge.shape_name,
                 status="valid",
                 is_correct=True,
@@ -509,7 +537,7 @@ class GeometryReasoningEngine:
             msg = f"Mô hình chưa hoàn thành! Thiếu {len(missing_vertices)} đỉnh: {', '.join(missing_vertices)}."
             if missing_edges:
                 msg += f" Thiếu cạnh: {missing_edges_str}."
-            return self._build_reasoning_result(
+            return build_result(
                 shape=active_knowledge.shape_name,
                 status="incomplete",
                 is_correct=False,
@@ -521,7 +549,7 @@ class GeometryReasoningEngine:
                     extra_vertices=extra_vertices,
                     missing_edges=missing_edges,
                     extra_edges=extra_edges,
-                    wrong_connections=wrong_connections or extra_edges,
+                    wrong_connections=wrong_connections,
                     degree_errors=degree_errors,
                     affected_vertices=affected_vertices,
                 ),
@@ -531,8 +559,8 @@ class GeometryReasoningEngine:
         # ----------------------------------------------------------------------
         # TRƯỜNG HỢP 3: NỐI SAI CẠNH (VỪA THIẾU CẠNH CHUẨN VỪA CÓ CẠNH/ĐỈNH LẠ)
         # ----------------------------------------------------------------------
-        if missing_edges and (extra_vertices or extra_edges):
-            return self._build_reasoning_result(
+        if missing_edges and (extra_vertices or wrong_connections):
+            return build_result(
                 shape=active_knowledge.shape_name,
                 status="invalid",
                 is_correct=False,
@@ -546,7 +574,7 @@ class GeometryReasoningEngine:
                     extra_vertices=extra_vertices,
                     missing_edges=missing_edges,
                     extra_edges=extra_edges,
-                    wrong_connections=wrong_connections or extra_edges,
+                    wrong_connections=wrong_connections,
                     degree_errors=degree_errors,
                     affected_vertices=affected_vertices,
                 ),
@@ -557,7 +585,7 @@ class GeometryReasoningEngine:
         # TRƯỜNG HỢP 4: CHỈ THIẾU CẠNH (MISSING EDGE)
         # ----------------------------------------------------------------------
         if missing_edges:
-            return self._build_reasoning_result(
+            return build_result(
                 shape=active_knowledge.shape_name,
                 status="incomplete",
                 is_correct=False,
@@ -569,6 +597,7 @@ class GeometryReasoningEngine:
                 ),
                 details=self._build_error_detail(
                     missing_edges=missing_edges,
+                    extra_edges=extra_edges,
                     degree_errors=degree_errors,
                     affected_vertices=affected_vertices,
                 ),
@@ -578,7 +607,7 @@ class GeometryReasoningEngine:
         # ----------------------------------------------------------------------
         # TRƯỜNG HỢP 5: THỪA ĐỈNH HOẶC THỪA CẠNH (EXTRA VERTEX / EXTRA EDGE)
         # ----------------------------------------------------------------------
-        return self._build_reasoning_result(
+        return build_result(
             shape=active_knowledge.shape_name,
             status="invalid",
             is_correct=False,
@@ -593,9 +622,18 @@ class GeometryReasoningEngine:
             details=self._build_error_detail(
                 extra_vertices=extra_vertices,
                 extra_edges=extra_edges,
-                wrong_connections=wrong_connections or extra_edges,
+                wrong_connections=wrong_connections,
                 degree_errors=degree_errors,
                 affected_vertices=affected_vertices,
             ),
             metrics=metrics,
         )
+
+    def process_json(self, payload: str, indent: int = 2) -> str:
+        """Nhận JSON CV và trả JSON kết quả để dùng ở lớp tích hợp với Unity."""
+        try:
+            decoded = json.loads(payload)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("Không đọc được JSON đầu vào từ Computer Vision.") from error
+        cv_input = CVDataInput.from_dict(decoded)
+        return self.process(cv_input).to_json(indent=indent)

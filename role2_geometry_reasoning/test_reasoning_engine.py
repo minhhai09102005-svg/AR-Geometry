@@ -42,7 +42,9 @@ class GeometryReasoningTests(unittest.TestCase):
                 self.assertTrue(result.correct)
 
     def test_missing_edge_is_named(self):
-        edges = list(KNOWLEDGE_BASE["cube"].expected_edges[:-1])
+        # Chọn cạnh cụ thể thay vì phụ thuộc thứ tự các cạnh trong knowledge base.
+        edges = list(KNOWLEDGE_BASE["cube"].expected_edges)
+        edges.remove(("G", "H"))
         result = GeometryReasoningEngine("cube").process(make_input("cube", edges))
         self.assertEqual("missing_edge", result.error_type)
         self.assertEqual([("G", "H")], result.details.missing_edges)
@@ -97,6 +99,22 @@ class GeometryReasoningTests(unittest.TestCase):
         payload = json.loads(result.to_json())
         self.assertTrue(payload["correct"])
         self.assertEqual(42, payload["frame_id"])
+
+    def test_json_contract_accepts_geometry_packet_and_rejects_hand_packet(self):
+        geometry_packet = {
+            "timestamp": 123.5,
+            "frameId": 42,
+            "target_shape": "cube",
+            "vertices": [{"id": name} for name in "ABCDEFGH"],
+            "detected_edges": list(KNOWLEDGE_BASE["cube"].expected_edges),
+        }
+        response = json.loads(GeometryReasoningEngine().process_json(json.dumps(geometry_packet)))
+        self.assertTrue(response["correct"])
+        self.assertEqual(42, response["frame_id"])
+
+        # Role 1 hand tracking packet chỉ có gesture, chưa có graph hình học.
+        with self.assertRaisesRegex(ValueError, "chưa chứa cấu trúc hình học"):
+            GeometryReasoningEngine().process_json(json.dumps({"hands": [], "frame_id": 42}))
 
     def test_prism_and_pyramid_area_and_volume(self):
         cube_points = {
