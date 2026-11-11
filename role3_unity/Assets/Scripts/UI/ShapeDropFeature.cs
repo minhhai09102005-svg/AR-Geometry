@@ -6,8 +6,10 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using TouchPhase = UnityEngine.InputSystem.TouchPhase;
 
 public class ShapeDropFeature : MonoBehaviour
 {
@@ -23,8 +25,8 @@ public class ShapeDropFeature : MonoBehaviour
     {
         public int index;
         public RectTransform rect;
-        public Vector2 startPosition;
         public bool completed;
+        public GrabbableObject body;
     }
 
     [Serializable]
@@ -108,14 +110,15 @@ public class ShapeDropFeature : MonoBehaviour
         new List<UnityEngine.Object>();
 
     private Canvas canvas;
-    private RectTransform canvasRect;
+    private SpatialWorkspace workspace;
+    private Vector3 handPosition;
+    private bool handHasDepth;
+
+    private readonly Sprite[] emptyHoleSprites = new Sprite[4];
 
     private TMP_Text totalText;
     private TMP_Text feedbackText;
     private RectTransform progressBar;
-
-    private RectTransform handCursor;
-    private Image handCursorImage;
 
     private Piece dragging;
     private Piece pendingPiece;
@@ -125,12 +128,15 @@ public class ShapeDropFeature : MonoBehaviour
     private int requestCounter;
     private int pendingRequestId;
     private int completedCount;
+    private int activeTouchId = -1;
 
     private string sessionId;
     private string activeHand;
+    private string pendingRequestJson;
 
     private float lastHandPacket;
     private float pendingSince;
+    private float nextReachLog;
 
     private bool pending;
     private bool gameScreen;
@@ -153,8 +159,12 @@ public class ShapeDropFeature : MonoBehaviour
     {
         if (scene.name == "MainMenu")
         {
-            new GameObject("ShapeDrop_Menu")
-                .AddComponent<ShapeDropFeature>();
+            if (UnityEngine.Object.FindAnyObjectByType<
+                ShapeDropFeature>() == null)
+            {
+                new GameObject("ShapeDrop_Menu")
+                    .AddComponent<ShapeDropFeature>();
+            }
         }
         else if (
             scene.name == "ARMain" &&
@@ -167,6 +177,13 @@ public class ShapeDropFeature : MonoBehaviour
 
             if (oldController != null)
                 oldController.enabled = false;
+
+            ARObjectPlacement oldPlacement =
+                UnityEngine.Object.FindAnyObjectByType<
+                    ARObjectPlacement>();
+
+            if (oldPlacement != null)
+                oldPlacement.enabled = false;
 
             GameObject scanCanvas =
                 GameObject.Find("ScanCanvas");
@@ -187,14 +204,20 @@ public class ShapeDropFeature : MonoBehaviour
 
     private void OnEnable()
     {
-        HandDataReceiver.PacketReceived += OnHandPacket;
+        EnhancedTouchSupport.Enable();
+        SpatialHandInteractor.HandUpdated += OnHandPacket;
+        SpatialHandInteractor.TrackingLost += CancelHandDrag;
         HandDataReceiver.GeometryResultReceived += OnGeometryResult;
     }
 
     private void OnDisable()
     {
-        HandDataReceiver.PacketReceived -= OnHandPacket;
+        EnhancedTouchSupport.Disable();
+        activeTouchId = -1;
+        SpatialHandInteractor.HandUpdated -= OnHandPacket;
+        SpatialHandInteractor.TrackingLost -= CancelHandDrag;
         HandDataReceiver.GeometryResultReceived -= OnGeometryResult;
+        CancelHandDrag();
     }
 
     private void Start()
@@ -221,8 +244,17 @@ public class ShapeDropFeature : MonoBehaviour
 
     private void InstallMenu()
     {
-        Canvas menuCanvas =
-            UnityEngine.Object.FindAnyObjectByType<Canvas>();
+        Canvas menuCanvas = null;
+
+        foreach (Canvas candidate in UnityEngine.Object.FindObjectsByType<Canvas>(
+            FindObjectsSortMode.None))
+        {
+            if (candidate.transform.Find("ShapeSelectionPanel") != null)
+            {
+                menuCanvas = candidate;
+                break;
+            }
+        }
 
         if (menuCanvas == null)
         {
@@ -252,7 +284,7 @@ public class ShapeDropFeature : MonoBehaviour
                 title.GetComponent<TMP_Text>();
 
             if (text != null)
-                text.text = "MENU";
+                text.text = "CHỌN CHẾ ĐỘ";
         }
 
         Transform cube = panel.Find("CubeButton");
@@ -406,6 +438,8 @@ public class ShapeDropFeature : MonoBehaviour
         RectTransform rect =
             button.GetComponent<RectTransform>();
 
+        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
         rect.anchoredPosition = position;
         rect.sizeDelta =
             new Vector2(490f, 150f);
@@ -460,8 +494,8 @@ public class ShapeDropFeature : MonoBehaviour
 
         scaler.matchWidthOrHeight = 0.5f;
 
-        canvasRect =
-            root.GetComponent<RectTransform>();
+        workspace = SpatialWorkspace.Ensure();
+        workspace.ConfigureCanvas(canvas);
 
         BuildInterface();
 
@@ -511,6 +545,14 @@ public class ShapeDropFeature : MonoBehaviour
             BackToMenu
         );
 
+        MakeButton(
+            header,
+            "LÀM LẠI",
+            new Vector2(610, -52),
+            new Vector2(195, 65),
+            ResetGame
+        );
+
         // =================================================
         // BỐN LỖ ĐEN
         // =================================================
@@ -531,6 +573,8 @@ public class ShapeDropFeature : MonoBehaviour
             new Vector2(150, 150)
         };
 
+        Material boardMaterial = workspace.MakeMaterial(new Color32(29, 53, 72, 255));
+
         for (int i = 0; i < 4; i++)
         {
             holes[i] = Panel(
@@ -541,8 +585,14 @@ public class ShapeDropFeature : MonoBehaviour
                 Color.white
             );
 
-            Image image =
-                holes[i].GetComponent<Image>();
+            holes[i].GetComponent<Image>().enabled = false;
+
+            RectTransform back = Panel(
+                holes[i], "BackOfHole", Vector2.zero, holeSizes[i], Color.white
+            );
+            back.localPosition = new Vector3(0f, 0f, 105f);
+
+            Image image = back.GetComponent<Image>();
 
             image.sprite = ShapeSprite(
                 (Shape)i,
@@ -552,53 +602,53 @@ public class ShapeDropFeature : MonoBehaviour
 
             image.raycastTarget = false;
             holeImages[i] = image;
+            emptyHoleSprites[i] = image.sprite;
+
+            GameObject rim = MakeSolid(
+                holes[i], "HoleRim3D", i, holeSizes[i], 100f, true, boardMaterial
+            );
+            rim.transform.localPosition = new Vector3(0f, 0f, 50f);
         }
 
         // =================================================
-        // BỐN KHỐI MÀU
-        //
-        // ĐÃ BỎ HOÀN TOÀN LỚP BACK / SHADOW
-        // MỖI KHỐI CHỈ CÒN MỘT LỚP MÀU DUY NHẤT
+        // BỐN KHỐI MÀU CÓ ĐỘ DÀY
         // =================================================
 
         Vector2[] starts =
         {
-            new Vector2(-530, -295),
-            new Vector2(-230, -295),
-            new Vector2(75, -295),
-            new Vector2(385, -295)
+            new Vector2(-530, -245),
+            new Vector2(-230, -245),
+            new Vector2(75, -245),
+            new Vector2(385, -245)
         };
+
+        RectTransform tray = Panel(
+            canvas.transform, "PieceTray", new Vector2(-85f, -245f),
+            new Vector2(1190f, 210f), Navy
+        );
+        tray.localPosition += Vector3.forward * 120f;
 
         for (int i = 0; i < 4; i++)
         {
             Piece piece = new Piece();
 
             piece.index = i;
-            piece.startPosition = starts[i];
 
             RectTransform group = Container(
                 canvas.transform,
                 "Piece_" + ShapeIds[i],
                 starts[i],
-                new Vector2(165, 165)
+                holeSizes[i]
             );
 
-            // Chỉ tạo hình phía trước.
-            // Không còn hình tối lệch phía sau.
-            RectTransform front = Panel(
-                group,
-                "Front",
-                Vector2.zero,
-                new Vector2(145, 145),
-                Color.white
+            MakeSolid(
+                group, "SolidPiece3D", i, holeSizes[i] * 0.94f, 70f, false,
+                workspace.MakeMaterial(ShapeColors[i])
             );
 
-            front.GetComponent<Image>().sprite =
-                ShapeSprite(
-                    (Shape)i,
-                    ShapeColors[i],
-                    ShapeColors[i]
-                );
+            group.localPosition = new Vector3(starts[i].x, starts[i].y, -50f);
+            piece.body = group.gameObject.AddComponent<GrabbableObject>();
+            piece.body.RememberHome();
 
             AddText(
                 group,
@@ -717,9 +767,9 @@ public class ShapeDropFeature : MonoBehaviour
         feedbackText = AddText(
             canvas.transform,
             "Chọn một khối để bắt đầu",
-            new Vector2(0, -208),
-            new Vector2(750, 60),
-            26,
+            new Vector2(-520, 70),
+            new Vector2(400, 240),
+            24,
             Color.white
         );
 
@@ -727,26 +777,7 @@ public class ShapeDropFeature : MonoBehaviour
         // CON TRỎ PINCH
         // =================================================
 
-        handCursor = Panel(
-            canvas.transform,
-            "HandCursor",
-            Vector2.zero,
-            new Vector2(19, 19),
-            Yellow
-        );
-
-        handCursorImage =
-            handCursor.GetComponent<Image>();
-
-        handCursorImage.sprite =
-            ShapeSprite(
-                Shape.Circle,
-                Color.white,
-                Color.white
-            );
-
-        handCursor.gameObject.SetActive(false);
-        handCursor.SetAsLastSibling();
+        // SpatialHandInteractor draws one shared 3D hand cursor.
 
         UpdateProgress();
     }
@@ -754,6 +785,35 @@ public class ShapeDropFeature : MonoBehaviour
     // =====================================================
     // UI HELPERS
     // =====================================================
+
+    private GameObject MakeSolid(
+        Transform parent,
+        string name,
+        int shape,
+        Vector2 size,
+        float depth,
+        bool hole,
+        Material material)
+    {
+        Mesh mesh = SpatialShapeMesh.Make(
+            shape, size, depth, hole, new Vector2(300f, 210f)
+        );
+        generatedAssets.Add(mesh);
+
+        GameObject obj = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
+        obj.transform.SetParent(parent, false);
+        obj.GetComponent<MeshFilter>().sharedMesh = mesh;
+        obj.GetComponent<MeshRenderer>().sharedMaterial = material;
+
+        if (!hole)
+        {
+            MeshCollider collider = obj.AddComponent<MeshCollider>();
+            collider.sharedMesh = mesh;
+            collider.convex = true;
+        }
+
+        return obj;
+    }
 
     private static RectTransform Container(
         Transform parent,
@@ -973,10 +1033,25 @@ public class ShapeDropFeature : MonoBehaviour
             return;
 
         // ===============================
-        // MOUSE
+        // TOUCH / MOUSE
         // ===============================
 
-        if (Mouse.current != null)
+        if (SpatialTouchInput.Read(ref activeTouchId, out Vector2 touchPoint,
+            out TouchPhase touchPhase))
+        {
+            if (touchPhase == TouchPhase.Began)
+                BeginDrag(touchPoint, 1);
+            else if (touchPhase == TouchPhase.Ended)
+                EndDrag(touchPoint, 1);
+            else if (touchPhase == TouchPhase.Canceled)
+            {
+                if (dragSource == 1)
+                    CancelDrag();
+            }
+            else
+                MoveDrag(touchPoint, 1);
+        }
+        else if (Mouse.current != null && !PhoneHeadsetDisplay.IsActive)
         {
             Vector2 point =
                 Mouse.current.position.ReadValue();
@@ -1002,70 +1077,16 @@ public class ShapeDropFeature : MonoBehaviour
         }
 
         // ===============================
-        // TOUCH
-        // ===============================
-
-        if (
-            Touchscreen.current != null &&
-            Touchscreen.current.primaryTouch
-                .press.wasPressedThisFrame
-        )
-        {
-            BeginDrag(
-                Touchscreen.current.primaryTouch
-                    .position.ReadValue(),
-                1
-            );
-        }
-
-        if (
-            Touchscreen.current != null &&
-            Touchscreen.current.primaryTouch
-                .press.isPressed
-        )
-        {
-            MoveDrag(
-                Touchscreen.current.primaryTouch
-                    .position.ReadValue(),
-                1
-            );
-        }
-
-        if (
-            Touchscreen.current != null &&
-            Touchscreen.current.primaryTouch
-                .press.wasReleasedThisFrame
-        )
-        {
-            EndDrag(
-                Touchscreen.current.primaryTouch
-                    .position.ReadValue(),
-                1
-            );
-        }
-
-        // ===============================
         // LOST HAND TRACKING
         // ===============================
 
         if (
-            dragSource == 2 &&
+            activeHand != null &&
             Time.unscaledTime -
                 lastHandPacket > 0.7f
         )
         {
-            CancelDrag();
-            activeHand = null;
-        }
-
-        if (
-            handCursor != null &&
-            lastHandPacket > 0 &&
-            Time.unscaledTime -
-                lastHandPacket > 0.7f
-        )
-        {
-            handCursor.gameObject.SetActive(false);
+            CancelHandDrag();
         }
 
         // ===============================
@@ -1078,8 +1099,17 @@ public class ShapeDropFeature : MonoBehaviour
             Time.unscaledTime > pendingSince + 5f
         )
         {
-            feedbackText.text =
-                "Đang chờ kết quả kiểm tra từ bộ xử lý...";
+            // Role 2 caches results by request_id. Retry the same request
+            // after a lost response or reconnect without placing it twice.
+            pendingSince = Time.unscaledTime;
+
+            bool sent = HandDataReceiver.SendGeometryJson(
+                pendingRequestJson
+            );
+
+            feedbackText.text = sent
+                ? "Đang gửi lại yêu cầu kiểm tra hình học..."
+                : "Mất kết nối bộ xử lý. Đang kết nối và gửi lại...";
         }
     }
 
@@ -1088,92 +1118,118 @@ public class ShapeDropFeature : MonoBehaviour
     // =====================================================
 
     private void OnHandPacket(
-        HandDataReceiver.HandPacket packet)
+        SpatialHandInteractor.HandFrame hand)
     {
-        if (
-            !gameScreen ||
-            packet == null ||
-            packet.hands == null ||
-            packet.coordinate_system !=
-                "normalized_image"
-        )
+        if (!gameScreen || canvas == null || canvas.worldCamera == null)
             return;
 
-        HandDataReceiver.HandData hand = null;
-
-        foreach (
-            HandDataReceiver.HandData candidate
-            in packet.hands
-        )
-        {
-            if (
-                candidate == null ||
-                candidate.interaction == null
-            )
-                continue;
-
-            if (
-                activeHand == null ||
-                candidate.hand == activeHand
-            )
-            {
-                hand = candidate;
-                break;
-            }
-        }
-
-        if (hand == null)
+        if (activeHand != null && hand.hand != activeHand)
             return;
 
         lastHandPacket = Time.unscaledTime;
+        handPosition = hand.position;
+        handHasDepth = hand.hasDepth;
 
-        Vector2 point = new Vector2(
-            Mathf.Clamp01(hand.interaction.x) *
-                Screen.width,
+        Vector3 projected = canvas.worldCamera.WorldToScreenPoint(handPosition);
 
-            (
-                1f -
-                Mathf.Clamp01(hand.interaction.y)
-            ) * Screen.height
-        );
-
-        if (handCursor != null)
+        if (projected.z <= 0f)
         {
-            handCursor.gameObject.SetActive(true);
-
-            PositionInCanvas(
-                handCursor,
-                point
-            );
-
-            bool pinching =
-                hand.gesture == "PINCH_START" ||
-                hand.gesture == "PINCH_HOLD";
-
-            handCursorImage.color =
-                pinching ? Green : Yellow;
+            CancelHandDrag();
+            return;
         }
+
+        Vector2 point = new Vector2(projected.x, projected.y);
 
         if (
             hand.gesture == "PINCH_START" ||
             hand.gesture == "PINCH_HOLD"
         )
         {
-            if (activeHand == null)
-                activeHand = hand.hand;
-
             if (dragSource == 0)
-                BeginDrag(point, 2);
-            else
+            {
+                if (!hand.overButton)
+                {
+                    if (handHasDepth)
+                        BeginSpatialDrag();
+                    else
+                        BeginDrag(point, 2);
+                }
+            }
+            else if (dragSource == 2 && handHasDepth && dragging != null)
+                dragging.body.MoveGrab(handPosition);
+            else if (dragSource == 2)
                 MoveDrag(point, 2);
+
+            // A pinch away from a piece must not reserve this hand.
+            if (dragSource == 2)
+                activeHand = hand.hand;
         }
-        else if (hand.gesture == "PINCH_END")
+        else if (hand.gesture == "PINCH_END" || hand.gesture == "OPEN")
         {
             if (dragSource == 2)
                 EndDrag(point, 2);
 
             activeHand = null;
         }
+    }
+
+    private void BeginSpatialDrag()
+    {
+        if (pending)
+            return;
+
+        Piece nearest = null;
+        float radius = 0.035f;
+        float closestDistance = float.PositiveInfinity;
+        Vector3 closestPosition = Vector3.zero;
+
+        foreach (Piece piece in pieces)
+        {
+            if (piece.completed)
+                continue;
+
+            float distance = piece.body.DistanceTo(handPosition);
+
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestPosition = piece.rect.position;
+            }
+
+            if (distance <= radius)
+            {
+                radius = distance;
+                nearest = piece;
+            }
+        }
+
+        if (nearest == null)
+        {
+            if (Time.unscaledTime >= nextReachLog && !float.IsInfinity(closestDistance))
+            {
+                nextReachLog = Time.unscaledTime + 2f;
+                Transform view = canvas.worldCamera.transform;
+                SpatialWorkspace.LogInteraction("Hand reach: handDepth=" +
+                    view.InverseTransformPoint(handPosition).z.ToString("F3") +
+                    "; pieceDepth=" + view.InverseTransformPoint(closestPosition).z.ToString("F3") +
+                    "; gap=" + closestDistance.ToString("F3"));
+            }
+            return;
+        }
+
+        dragging = nearest;
+        dragSource = 2;
+        nearest.body.BeginGrab(handPosition);
+        SpatialWorkspace.LogInteraction("Hand grab: " + ShapeIds[nearest.index]);
+    }
+
+    private void CancelHandDrag()
+    {
+        if (dragSource == 2)
+            CancelDrag();
+
+        activeHand = null;
+        lastHandPacket = 0f;
     }
 
     // =====================================================
@@ -1184,18 +1240,18 @@ public class ShapeDropFeature : MonoBehaviour
         RectTransform rect,
         Vector2 screenPoint)
     {
-        Vector2 local;
+        Vector3 world;
 
         if (!RectTransformUtility
-            .ScreenPointToLocalPointInRectangle(
-                canvasRect,
+            .ScreenPointToWorldPointInRectangle(
+                rect,
                 screenPoint,
-                null,
-                out local
+                canvas.worldCamera,
+                out world
             ))
             return false;
 
-        rect.anchoredPosition = local;
+        rect.position = world;
 
         return true;
     }
@@ -1208,6 +1264,8 @@ public class ShapeDropFeature : MonoBehaviour
         Vector2 point,
         int inputSource)
     {
+        SpatialWorkspace.LogInteraction("Drop pointer: " + inputSource + " " + point);
+
         if (
             dragSource != 0 ||
             pending
@@ -1226,7 +1284,7 @@ public class ShapeDropFeature : MonoBehaviour
                 .RectangleContainsScreenPoint(
                     piece.rect,
                     point,
-                    null
+                    canvas.worldCamera
                 )
             )
             {
@@ -1278,11 +1336,24 @@ public class ShapeDropFeature : MonoBehaviour
 
         Piece piece = dragging;
 
+        // The release packet may arrive without a final HOLD packet.
+        if (inputSource == 2 && handHasDepth)
+            piece.body.MoveGrab(handPosition);
+
         dragging = null;
         dragSource = 0;
 
+        if (inputSource == 1 || !handHasDepth)
+        {
+            Plane board = new Plane(workspace.transform.forward, workspace.transform.position);
+            Ray ray = canvas.worldCamera.ScreenPointToRay(point);
+
+            if (board.Raycast(ray, out float distance))
+                piece.rect.position = ray.GetPoint(distance);
+        }
+
         // Tìm lỗ gần nhất.
-        // Unity KHÔNG tự kiểm tra đúng sai.
+        // Giữ phần quyết định đúng/sai của hình cho Role 2.
 
         int nearestHole = 0;
 
@@ -1293,16 +1364,7 @@ public class ShapeDropFeature : MonoBehaviour
 
         for (int i = 0; i < holes.Length; i++)
         {
-            Vector2 offset;
-
-            if (!RectTransformUtility
-                .ScreenPointToLocalPointInRectangle(
-                    holes[i],
-                    point,
-                    null,
-                    out offset
-                ))
-                continue;
+            Vector3 offset = holes[i].InverseTransformPoint(piece.rect.position);
 
             Vector2 normalized = new Vector2(
                 offset.x /
@@ -1327,6 +1389,24 @@ public class ShapeDropFeature : MonoBehaviour
                 nearestHole = i;
                 bestOffset = normalized;
             }
+        }
+
+        // Proximity is handled in Unity; Role 2 still decides shape,
+        // in-plane offset and rotation using the original JSON contract.
+        float depth = Mathf.Abs(
+            holes[nearestHole].InverseTransformPoint(piece.rect.position).z *
+            holes[nearestHole].lossyScale.z
+        );
+
+        if (inputSource == 2)
+            SpatialWorkspace.LogInteraction("Hand release: " + ShapeIds[piece.index] +
+                "; depth=" + depth.ToString("F3"));
+
+        if (inputSource == 2 && handHasDepth && depth > 0.055f)
+        {
+            piece.body.ReturnHome();
+            feedbackText.text = "Đưa khối sát mặt bảng trước khi thả";
+            return;
         }
 
         DropRequest request =
@@ -1355,6 +1435,8 @@ public class ShapeDropFeature : MonoBehaviour
         string json =
             JsonUtility.ToJson(request);
 
+        pendingRequestJson = json;
+
         pendingPiece = piece;
 
         pendingHole =
@@ -1370,14 +1452,14 @@ public class ShapeDropFeature : MonoBehaviour
 
         if (!sent)
         {
+            pendingRequestJson = null;
             pendingPiece = null;
             pendingHole = -1;
 
-            piece.rect.anchoredPosition =
-                piece.startPosition;
+            piece.body.ReturnHome();
 
             feedbackText.text =
-                "Chưa kết nối bộ xử lý. Hãy kiểm tra backend.";
+                "Chưa kết nối máy tính. Hãy kiểm tra Wi-Fi.";
 
             return;
         }
@@ -1447,6 +1529,7 @@ public class ShapeDropFeature : MonoBehaviour
         int hole = pendingHole;
 
         pending = false;
+        pendingRequestJson = null;
         pendingPiece = null;
         pendingHole = -1;
 
@@ -1462,8 +1545,7 @@ public class ShapeDropFeature : MonoBehaviour
         }
         else
         {
-            piece.rect.anchoredPosition =
-                piece.startPosition;
+            piece.body.ReturnHome();
 
             feedbackText.text =
                 string.IsNullOrEmpty(
@@ -1483,12 +1565,14 @@ public class ShapeDropFeature : MonoBehaviour
         int hole)
     {
         piece.completed = true;
+        piece.body.Available = false;
 
-        Vector2 from =
-            piece.rect.anchoredPosition;
+        Vector3 from = piece.rect.position;
 
-        Vector2 to =
-            holes[hole].anchoredPosition;
+        Vector3 to = holes[hole].position + workspace.transform.forward * 0.02f;
+
+        foreach (TMP_Text label in piece.rect.GetComponentsInChildren<TMP_Text>(true))
+            label.gameObject.SetActive(false);
 
         Vector3 originalScale =
             piece.rect.localScale;
@@ -1505,8 +1589,8 @@ public class ShapeDropFeature : MonoBehaviour
                     elapsed / duration
                 );
 
-            piece.rect.anchoredPosition =
-                Vector2.Lerp(
+            piece.rect.position =
+                Vector3.Lerp(
                     from,
                     to,
                     t
@@ -1515,14 +1599,14 @@ public class ShapeDropFeature : MonoBehaviour
             piece.rect.localScale =
                 Vector3.Lerp(
                     originalScale,
-                    Vector3.one * 0.15f,
+                    originalScale * 0.97f,
                     t
                 );
 
             yield return null;
         }
 
-        piece.rect.gameObject.SetActive(false);
+        piece.rect.position = to;
 
         holeImages[hole].sprite =
             ShapeSprite(
@@ -1549,8 +1633,7 @@ public class ShapeDropFeature : MonoBehaviour
     {
         if (dragging != null)
         {
-            dragging.rect.anchoredPosition =
-                dragging.startPosition;
+            dragging.body.ReturnHome();
         }
 
         dragging = null;
@@ -1596,6 +1679,35 @@ public class ShapeDropFeature : MonoBehaviour
     // =====================================================
     // BACK TO MENU
     // =====================================================
+
+    private void ResetGame()
+    {
+        StopAllCoroutines();
+        CancelDrag();
+
+        sessionId = Guid.NewGuid().ToString("N");
+        pending = false;
+        pendingPiece = null;
+        pendingHole = -1;
+        pendingRequestJson = null;
+        requestCounter = pendingRequestId = completedCount = 0;
+        activeHand = null;
+
+        for (int i = 0; i < pieces.Length; i++)
+        {
+            Piece piece = pieces[i];
+            piece.completed = false;
+            piece.body.Available = true;
+            piece.body.ReturnHome();
+            holeImages[i].sprite = emptyHoleSprites[i];
+
+            foreach (TMP_Text label in piece.rect.GetComponentsInChildren<TMP_Text>(true))
+                label.gameObject.SetActive(true);
+        }
+
+        UpdateProgress();
+        feedbackText.text = "Chọn một khối để bắt đầu";
+    }
 
     private void BackToMenu()
     {

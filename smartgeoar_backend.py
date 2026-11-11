@@ -3,6 +3,7 @@ import argparse
 import base64
 import json
 import os
+import queue
 import socket
 import sys
 import threading
@@ -45,6 +46,8 @@ from role1_week2_stream import (
     make_hand_data,
     smooth_point,
 )
+from hand_pose import HandPoseEstimator
+from phone_hand_tracking import PhoneHandTracking
 
 
 # =========================================================
@@ -60,7 +63,7 @@ from shape_drop_engine import ShapeDropEngine
 # CONFIG
 # =========================================================
 
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 5053
 
 VIDEO_FPS = 12
@@ -181,6 +184,9 @@ class PinchOwnerGuard:
                 # khiến Unity nhả cạnh.
                 ghost["gesture"] = "PINCH_HOLD"
 
+                if "spatial" in ghost:
+                    ghost["spatial"] = {"valid": False}
+
                 return [ghost]
 
             # -----------------------------------------
@@ -192,6 +198,9 @@ class PinchOwnerGuard:
                 lost_hand = dict(self.last_hand)
 
                 lost_hand["gesture"] = "PINCH_END"
+
+                if "spatial" in lost_hand:
+                    lost_hand["spatial"] = {"valid": False}
 
                 print(
                     "[GRIP] Owner tracking lost:",
@@ -275,13 +284,15 @@ class PinchOwnerGuard:
 
 class AppConnection:
 
-    def __init__(self, sock):
+    def __init__(self, sock, camera_source="phone"):
 
         self.sock = sock
 
         self.lock = threading.Lock()
 
         self.alive = True
+        self.camera_source = camera_source
+        self.phone_frames = queue.Queue(maxsize=1)
 
     def send(self, packet):
 
@@ -452,12 +463,17 @@ def receive_requests(client):
             encoding="utf-8"
         ) as reader:
 
-            for line in reader:
+            while client.alive:
+
+                line = reader.readline(1000001)
+
+                if not line:
+                    break
 
                 if not client.alive:
                     break
 
-                if len(line) > 100000:
+                if len(line) > 1000000:
                     break
 
                 try:
@@ -473,6 +489,19 @@ def receive_requests(client):
                     packet_type = packet.get(
                         "type", ""
                     )
+
+                    if packet_type == "phone_camera_frame":
+                        if client.camera_source == "phone":
+                            if client.phone_frames.full():
+                                try:
+                                    client.phone_frames.get_nowait()
+                                except queue.Empty:
+                                    pass
+                            client.phone_frames.put_nowait(packet)
+                        continue
+
+                    if len(line) > 100000:
+                        break
 
                     # ---------------------------------
                     # PING
@@ -517,7 +546,8 @@ def receive_requests(client):
 
                     print(
                         "[BACKEND ERROR]",
-                        error,
+                        # Redirected Windows stdout may not support Vietnamese.
+                        ascii(error),
                         flush=True
                     )
 
@@ -538,10 +568,65 @@ def receive_requests(client):
 # ROLE 1 - CAMERA + MEDIAPIPE
 # =========================================================
 
-def stream_camera(client):
+def stream_phone_camera(client):
+
+    tracker = PhoneHandTracking()
+    owner = PinchOwnerGuard()
+    last_heartbeat = 0.0
+    last_frame = -1
+
+    try:
+        while client.alive:
+            try:
+                packet = client.phone_frames.get(timeout=0.25)
+            except queue.Empty:
+                if time.monotonic() - last_heartbeat >= 1.0:
+                    last_heartbeat = time.monotonic()
+                    if not client.send({"source": "smartgeoar_backend", "type": "pong"}):
+                        break
+                continue
+
+            frame_id = packet.get("frame_id")
+
+            if not isinstance(frame_id, int) or frame_id <= last_frame:
+                continue
+
+            last_frame = frame_id
+            hands = []
+
+            try:
+                encoded = packet.get("jpeg", "")
+                if not isinstance(encoded, str) or len(encoded) > 700000:
+                    raise ValueError("Phone camera frame is too large")
+                data = base64.b64decode(encoded, validate=True)
+                frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is None or frame.shape[0] * frame.shape[1] > 1280 * 1280:
+                    raise ValueError("Invalid phone camera image")
+                intrinsics = packet.get("intrinsics")
+                if not isinstance(intrinsics, dict):
+                    raise ValueError("Phone camera intrinsics are missing")
+                hands = owner.filter(tracker.process(frame, frame_id, intrinsics))
+            except (ValueError, TypeError, cv2.error) as error:
+                print("[PHONE CAMERA]", ascii(error), flush=True)
+
+            if not client.send({
+                "version": "1.0",
+                "source": "role1_hand_tracking",
+                "camera_source": "phone_rear",
+                "frame_id": frame_id,
+                "coordinate_system": "normalized_image",
+                "hands": hands
+            }):
+                break
+    finally:
+        tracker.close()
+        client.close()
+
+def stream_camera(client, stream_video=True):
 
     # Mỗi phiên kết nối có bộ khóa tay riêng.
     hand_owner_guard = PinchOwnerGuard()
+    hand_pose = HandPoseEstimator()
 
     api = (
         cv2.CAP_DSHOW
@@ -712,19 +797,38 @@ def stream_camera(client):
 
                     state["last_ratio"] = ratio
 
+                    world_landmarks = None
+
+                    if (
+                        result.multi_hand_world_landmarks
+                        and index < len(result.multi_hand_world_landmarks)
+                    ):
+                        world_landmarks = result.multi_hand_world_landmarks[index]
+
+                    spatial = hand_pose.estimate(
+                        hand_name,
+                        landmarks,
+                        world_landmarks,
+                        width,
+                        height
+                    )
+
                     detected_hands.append(
                         make_hand_data(
                             hand_name,
                             gesture,
                             x,
                             y,
-                            ratio
+                            ratio,
+                            spatial
                         )
                     )
 
             # =================================================
             # XỬ LÝ MẤT TRACKING TỪ ROLE 1
             # =================================================
+
+            hand_pose.forget_missing(visible_hands)
 
             handle_missing_hands(
                 visible_hands,
@@ -767,6 +871,11 @@ def stream_camera(client):
                 break
 
             frame_id += 1
+
+            # A phone running ARCore already has its own camera background.
+            # Keep laptop hand tracking active without sending redundant JPEGs.
+            if not stream_video:
+                continue
 
             # =================================================
             # STREAM CAMERA
@@ -842,6 +951,25 @@ def main():
         default=PORT
     )
 
+    parser.add_argument(
+        "--host",
+        default=HOST,
+        help="Address to listen on (use 0.0.0.0 for LAN clients)"
+    )
+
+    parser.add_argument(
+        "--camera-source",
+        choices=("phone", "webcam"),
+        default="phone",
+        help="Use the phone rear camera (default), or explicitly opt into a laptop webcam"
+    )
+
+    parser.add_argument(
+        "--no-camera-stream",
+        action="store_true",
+        help="Do not send laptop webcam JPEG frames to Unity"
+    )
+
     args = parser.parse_args()
 
     with socket.socket(
@@ -856,15 +984,16 @@ def main():
         )
 
         server.bind(
-            (HOST, args.port)
+            (args.host, args.port)
         )
 
         server.listen(1)
 
         print(
-            f"SmartGeoAR backend: {HOST}:{args.port}",
+            f"SmartGeoAR backend: {args.host}:{args.port}",
             flush=True
         )
+        print("Hand camera source:", args.camera_source, flush=True)
 
         while True:
 
@@ -876,13 +1005,12 @@ def main():
                 1
             )
 
-            client = AppConnection(
-                sock
-            )
+            client = AppConnection(sock, camera_source=args.camera_source)
 
             client.send({
                 "source": "smartgeoar_backend",
-                "type": "hello"
+                "type": "hello",
+                "camera_source": args.camera_source
             })
 
             threading.Thread(
@@ -891,9 +1019,10 @@ def main():
                 daemon=True
             ).start()
 
-            stream_camera(
-                client
-            )
+            if args.camera_source == "phone":
+                stream_phone_camera(client)
+            else:
+                stream_camera(client, stream_video=not args.no_camera_stream)
 
 
 if __name__ == "__main__":

@@ -7,13 +7,15 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
-using UnityEngine.XR.ARFoundation;
-using UnityEngine.XR.ARSubsystems;
+using TouchPhase = UnityEngine.InputSystem.TouchPhase;
 
 public class ScanScreenController : MonoBehaviour
 {
+    private const float ModelScale = 0.62f;
+
     [Header("Existing UI")]
     [SerializeField] private TMP_Text shapeNameText;
     [SerializeField] private TMP_Text statusText;
@@ -44,6 +46,7 @@ public class ScanScreenController : MonoBehaviour
         public Color color;
         public RectTransform slot;
         public TMP_Text countLabel;
+        public GrabbableObject body;
     }
 
     [Serializable]
@@ -93,9 +96,6 @@ public class ScanScreenController : MonoBehaviour
     private readonly Dictionary<string, int> rodTypeByEdge =
         new Dictionary<string, int>();
 
-    private readonly List<ARRaycastHit> arHits =
-        new List<ARRaycastHit>();
-
     private readonly List<RaycastResult> uiHits =
         new List<RaycastResult>();
 
@@ -111,24 +111,28 @@ public class ScanScreenController : MonoBehaviour
 
     private int frameId;
     private int selectedRod = -1;
+    private int activeTouchId = -1;
 
     private bool running;
     private float lastHandPacketTime;
 
     private Vector2 previousPointer;
+    private Vector3 previousHandPosition;
 
     private ControlMode mode = ControlMode.None;
     private ControlSource source = ControlSource.None;
 
     private Canvas canvas;
     private Camera viewCamera;
-    private ARRaycastManager arRaycaster;
+    private SpatialWorkspace workspace;
+    private GrabbableObject heldRod;
+    private Vector3 handPosition;
+    private bool handHasDepth;
+    private bool handOverButton;
 
     private GameObject modelRoot;
 
     private RectTransform trayPanel;
-    private RectTransform dragIcon;
-    private Image dragIconImage;
 
     private Material nodeMaterial;
     private Material guideMaterial;
@@ -140,23 +144,33 @@ public class ScanScreenController : MonoBehaviour
 
     private void OnEnable()
     {
-        HandDataReceiver.PacketReceived += ReceiveHands;
+        EnhancedTouchSupport.Enable();
+        SpatialHandInteractor.HandUpdated += ReceiveHands;
+        SpatialHandInteractor.TrackingLost += CancelHandInteraction;
         HandDataReceiver.GeometryResultReceived += ApplyGeometryResultJson;
         HandDataReceiver.ConnectionChanged += OnConnectionChanged;
     }
 
     private void OnDisable()
     {
-        HandDataReceiver.PacketReceived -= ReceiveHands;
+        EnhancedTouchSupport.Disable();
+        activeTouchId = -1;
+        SpatialHandInteractor.HandUpdated -= ReceiveHands;
+        SpatialHandInteractor.TrackingLost -= CancelHandInteraction;
         HandDataReceiver.GeometryResultReceived -= ApplyGeometryResultJson;
         HandDataReceiver.ConnectionChanged -= OnConnectionChanged;
+        CancelHandInteraction();
+
+        if (source == ControlSource.MouseTouch)
+            ResetPointer();
     }
 
     private void Start()
     {
         viewCamera = Camera.main;
-        canvas = FindAnyObjectByType<Canvas>();
-        arRaycaster = FindAnyObjectByType<ARRaycastManager>();
+        canvas = shapeNameText.GetComponentInParent<Canvas>().rootCanvas;
+        workspace = SpatialWorkspace.Ensure();
+        workspace.ConfigureCanvas(canvas);
 
         if (mockDetection != null)
             mockDetection.StopMockDetection();
@@ -180,8 +194,10 @@ public class ScanScreenController : MonoBehaviour
 
         ConfigureShape();
         MakeMaterials();
+        ConfigureSpatialUI();
         BuildTray();
         ResetScreen();
+        StartScan();
 
         if (FindAnyObjectByType<HandDataReceiver>() == null)
         {
@@ -429,6 +445,60 @@ public class ScanScreenController : MonoBehaviour
     // UI
     // =====================================================
 
+    private void ConfigureSpatialUI()
+    {
+        // Keep the scene's texts/buttons and their original Unity events.
+        foreach (Image image in canvas.GetComponentsInChildren<Image>(true))
+        {
+            if (image.GetComponentInParent<Button>(true) == null)
+                image.enabled = false;
+        }
+
+        PositionText(shapeNameText, new Vector2(-110f, 395f),
+            new Vector2(1100f, 80f), 36f);
+        PositionText(statusText, new Vector2(565f, 310f),
+            new Vector2(390f, 100f), 25f);
+        PositionText(vertexText, new Vector2(565f, 230f),
+            new Vector2(390f, 60f), 24f);
+        PositionText(edgeText, new Vector2(565f, 170f),
+            new Vector2(390f, 60f), 24f);
+        PositionText(guideText, new Vector2(-70f, -295f),
+            new Vector2(1350f, 80f), 25f);
+
+        Button restart = scanButtonText.GetComponentInParent<Button>(true);
+
+        foreach (Button button in canvas.GetComponentsInChildren<Button>(true))
+        {
+            RectTransform rect = button.transform as RectTransform;
+            rect.SetParent(canvas.transform, false);
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = new Vector2(260f, 66f);
+            rect.anchoredPosition = new Vector2(
+                button == restart ? -290f : -600f, -400f
+            );
+
+            TMP_Text text = button.GetComponentInChildren<TMP_Text>(true);
+
+            if (text != null)
+                text.fontSize = 23f;
+        }
+    }
+
+    private void PositionText(
+        TMP_Text text, Vector2 point, Vector2 size, float fontSize)
+    {
+        text.transform.SetParent(canvas.transform, false);
+        RectTransform rect = text.rectTransform;
+        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = point;
+        rect.sizeDelta = size;
+        text.fontSize = fontSize;
+        text.alignment = TextAlignmentOptions.Center;
+        text.textWrappingMode = TextWrappingModes.Normal;
+    }
+
     private static RectTransform MakePanel(
         string name,
         Transform parent,
@@ -508,10 +578,7 @@ public class ScanScreenController : MonoBehaviour
             new Color(0.03f, 0.10f, 0.18f, 0.87f)
         );
 
-        trayPanel.anchorMin = new Vector2(1f, 0.5f);
-        trayPanel.anchorMax = new Vector2(1f, 0.5f);
-        trayPanel.pivot = new Vector2(1f, 0.5f);
-        trayPanel.anchoredPosition = new Vector2(-14f, 0f);
+        trayPanel.anchoredPosition = new Vector2(-650f, 10f);
 
         AddText(
             trayPanel,
@@ -583,6 +650,19 @@ public class ScanScreenController : MonoBehaviour
             );
 
             stick.anchoredPosition = new Vector2(-32f, -14f);
+            stick.gameObject.SetActive(false);
+
+            GameObject sample = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            sample.name = "ThanhTrongKhay_" + i;
+            sample.transform.SetParent(workspace.transform, false);
+            sample.transform.position = card.TransformPoint(new Vector3(-25f, -14f, -38f));
+            sample.transform.localRotation = Quaternion.Euler(0f, 0f, -90f);
+            sample.transform.localScale = new Vector3(
+                0.011f, (0.06f + 0.045f * rod.length / maxLength) * 0.5f, 0.011f
+            );
+            sample.GetComponent<Renderer>().sharedMaterial = rodMaterials[i];
+            rod.body = sample.AddComponent<GrabbableObject>();
+            rod.body.RememberHome();
         }
 
         AddText(
@@ -594,16 +674,6 @@ public class ScanScreenController : MonoBehaviour
             Color.white
         );
 
-        dragIcon = MakePanel(
-            "ThanhDangGap",
-            canvas.transform,
-            new Vector2(125f, 14f),
-            Color.white
-        );
-
-        dragIconImage = dragIcon.GetComponent<Image>();
-        dragIcon.gameObject.SetActive(false);
-
         RefreshInventory();
     }
 
@@ -614,38 +684,13 @@ public class ScanScreenController : MonoBehaviour
             if (rod.countLabel != null)
                 rod.countLabel.text =
                     rod.remaining + "/" + rod.total;
+
+            if (rod.body != null)
+            {
+                rod.body.Available = rod.remaining > 0;
+                rod.body.gameObject.SetActive(rod.remaining > 0);
+            }
         }
-    }
-
-    private bool SetUIPosition(
-        RectTransform rect,
-        Vector2 screenPoint
-    )
-    {
-        if (rect == null || canvas == null)
-            return false;
-
-        RectTransform canvasRect =
-            canvas.transform as RectTransform;
-
-        Camera uiCamera =
-            canvas.renderMode == RenderMode.ScreenSpaceOverlay
-                ? null
-                : canvas.worldCamera;
-
-        Vector2 local;
-
-        if (!RectTransformUtility
-            .ScreenPointToLocalPointInRectangle(
-                canvasRect,
-                screenPoint,
-                uiCamera,
-                out local
-            ))
-            return false;
-
-        rect.anchoredPosition = local;
-        return true;
     }
 
     private bool InTray(Vector2 point)
@@ -654,7 +699,7 @@ public class ScanScreenController : MonoBehaviour
             RectTransformUtility.RectangleContainsScreenPoint(
                 trayPanel,
                 point,
-                null
+                canvas.worldCamera
             );
     }
 
@@ -670,10 +715,24 @@ public class ScanScreenController : MonoBehaviour
             if (rod.remaining <= 0 || rod.slot == null)
                 continue;
 
+            if (isHand && handHasDepth)
+            {
+                float distance = rod.body != null
+                    ? rod.body.DistanceTo(handPosition) : float.PositiveInfinity;
+
+                if (distance <= 0.035f && distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestIndex = i;
+                }
+
+                continue;
+            }
+
             if (RectTransformUtility.RectangleContainsScreenPoint(
                 rod.slot,
                 point,
-                null
+                canvas.worldCamera
             ))
                 return i;
 
@@ -684,12 +743,12 @@ public class ScanScreenController : MonoBehaviour
 
             Vector2 bottomLeft =
                 RectTransformUtility.WorldToScreenPoint(
-                    null, screenCorners[0]
+                    canvas.worldCamera, screenCorners[0]
                 );
 
             Vector2 topRight =
                 RectTransformUtility.WorldToScreenPoint(
-                    null, screenCorners[2]
+                    canvas.worldCamera, screenCorners[2]
                 );
 
             float left = Mathf.Min(bottomLeft.x, topRight.x);
@@ -758,8 +817,8 @@ public class ScanScreenController : MonoBehaviour
         statusText.text = "Trạng thái: Chưa bắt đầu";
         vertexText.text = "Đỉnh: 0/" + vertexIds.Length;
         edgeText.text = "Cạnh đã lắp: 0/" + expectedEdges.Length;
-        guideText.text = "Bấm BẮT ĐẦU QUÉT để dựng khung 3D";
-        scanButtonText.text = "BẮT ĐẦU QUÉT";
+        guideText.text = "Đưa tay tới khay cạnh để bắt đầu";
+        scanButtonText.text = "BẮT ĐẦU";
     }
 
     public void ToggleScan()
@@ -797,44 +856,15 @@ public class ScanScreenController : MonoBehaviour
             "SmartGeoAR_" + ShapeCode()
         );
 
-        bool onPlane = false;
-
-        Vector2 aim = new Vector2(
-            Screen.width * 0.43f,
-            Screen.height * 0.5f
-        );
-
-        if (arRaycaster != null &&
-            arRaycaster.enabled &&
-            arRaycaster.Raycast(
-                aim,
-                arHits,
-                TrackableType.PlaneWithinPolygon
-            ) &&
-            arHits.Count > 0)
-        {
-            modelRoot.transform.position =
-                arHits[0].pose.position;
-
-            onPlane = true;
-        }
-        else
-        {
-            modelRoot.transform.position =
-                viewCamera.transform.position +
-                viewCamera.transform.forward * 0.85f -
-                viewCamera.transform.right * 0.15f -
-                viewCamera.transform.up * 0.08f;
-        }
-
-        modelRoot.transform.rotation =
-            Quaternion.Euler(
-                16f,
-                viewCamera.transform.eulerAngles.y + 25f,
-                0f
-            );
+        modelRoot.transform.SetParent(workspace.transform, false);
+        modelRoot.transform.localScale = Vector3.one * ModelScale;
+        modelRoot.transform.localRotation = Quaternion.Euler(16f, 25f, 0f);
 
         MakeModelPoints();
+
+        modelRoot.transform.localPosition = new Vector3(-0.015f, 0f, 0f) -
+            modelRoot.transform.localRotation * (GetLocalGeometricCenter() * ModelScale);
+
         MakeGuides();
         MakeVertexLabels();
 
@@ -844,9 +874,7 @@ public class ScanScreenController : MonoBehaviour
         edgeText.text =
             "Cạnh đã lắp: 0/" + expectedEdges.Length;
 
-        statusText.text = onPlane
-            ? "Trạng thái: Đã đặt khung AR"
-            : "Trạng thái: Khung 3D trước camera";
+        statusText.text = "ĐÃ ĐẶT KHUNG 3D";
 
         guideText.text =
             "Gắp thanh để lắp; nắm cạnh để xoay tự do";
@@ -1046,18 +1074,11 @@ public class ScanScreenController : MonoBehaviour
                     positions[id] + Vector3.up * 0.042f
                 );
 
-            Vector3 screen =
-                viewCamera.WorldToScreenPoint(world);
-
-            labels[id].gameObject.SetActive(screen.z > 0f);
-
-            if (screen.z > 0f)
-            {
-                SetUIPosition(
-                    labels[id].rectTransform,
-                    screen
-                );
-            }
+            labels[id].gameObject.SetActive(
+                viewCamera.WorldToViewportPoint(world).z > 0f
+            );
+            labels[id].rectTransform.position = world;
+            labels[id].rectTransform.rotation = viewCamera.transform.rotation;
         }
     }
 
@@ -1116,8 +1137,22 @@ public class ScanScreenController : MonoBehaviour
         );
     }
 
-    private bool IsOnStructure(Vector2 point)
+    private bool IsOnStructure(Vector2 point, bool isHand)
     {
+        if (isHand && handHasDepth)
+        {
+            foreach (string[] pair in expectedEdges)
+            {
+                Vector3 a = modelRoot.transform.TransformPoint(positions[pair[0]]);
+                Vector3 b = modelRoot.transform.TransformPoint(positions[pair[1]]);
+
+                if (DistanceToSegment(handPosition, a, b) <= 0.04f)
+                    return true;
+            }
+
+            return false;
+        }
+
         foreach (string id in vertexIds)
         {
             Vector2 vertex;
@@ -1143,6 +1178,35 @@ public class ScanScreenController : MonoBehaviour
 
     private string ClosestOpenEdge(Vector2 point)
     {
+        if (source == ControlSource.Hand && handHasDepth)
+        {
+            string nearest = null;
+            float radius = 0.045f;
+            Vector3 heldPoint = heldRod != null ? heldRod.transform.position : handPosition;
+
+            foreach (string[] pair in expectedEdges)
+            {
+                string key = EdgeKey(pair[0], pair[1]);
+
+                if (installed.ContainsKey(key))
+                    continue;
+
+                float distance = DistanceToSegment(
+                    heldPoint,
+                    modelRoot.transform.TransformPoint(positions[pair[0]]),
+                    modelRoot.transform.TransformPoint(positions[pair[1]])
+                );
+
+                if (distance < radius)
+                {
+                    radius = distance;
+                    nearest = key;
+                }
+            }
+
+            return nearest;
+        }
+
         float best = Mathf.Max(
             55f,
             Screen.height * 0.09f
@@ -1186,6 +1250,9 @@ public class ScanScreenController : MonoBehaviour
         {
             foreach (LineRenderer line in guides[highlightedEdge])
             {
+                if (line == null)
+                    continue;
+
                 line.startColor = Color.white;
                 line.endColor = Color.white;
             }
@@ -1203,6 +1270,9 @@ public class ScanScreenController : MonoBehaviour
 
         foreach (LineRenderer line in guides[edge])
         {
+            if (line == null)
+                continue;
+
             line.startColor = color;
             line.endColor = color;
         }
@@ -1210,19 +1280,47 @@ public class ScanScreenController : MonoBehaviour
 
     private void UpdateGhost(Vector2 point)
     {
-        if (selectedRod < 0 || dragIcon == null)
+        if (selectedRod < 0)
             return;
 
-        SetUIPosition(dragIcon, point);
+        if (heldRod != null)
+        {
+            Vector3 target = handPosition;
+
+            if (source != ControlSource.Hand)
+            {
+                Plane plane = new Plane(workspace.transform.forward, workspace.transform.position);
+                Ray ray = viewCamera.ScreenPointToRay(point);
+
+                if (!plane.Raycast(ray, out float distance))
+                    return;
+
+                target = ray.GetPoint(distance);
+            }
+
+            heldRod.MoveGrab(target);
+        }
 
         string edge = ClosestOpenEdge(point);
 
         SetHighlight(edge);
 
-        dragIconImage.color =
-            edge != null && rodTypeByEdge[edge] == selectedRod
-                ? Color.green
-                : rods[selectedRod].color;
+        if (edge != null && heldRod != null)
+        {
+            string[] pair = edge.Split('-');
+            heldRod.transform.rotation = Quaternion.FromToRotation(
+                Vector3.up,
+                modelRoot.transform.TransformDirection(positions[pair[1]] - positions[pair[0]])
+            );
+        }
+    }
+
+    private static float DistanceToSegment(Vector3 point, Vector3 a, Vector3 b)
+    {
+        Vector3 direction = b - a;
+        float t = Mathf.Clamp01(Vector3.Dot(point - a, direction) /
+            Mathf.Max(0.000001f, direction.sqrMagnitude));
+        return Vector3.Distance(point, a + direction * t);
     }
 
     // =====================================================
@@ -1358,10 +1456,12 @@ public class ScanScreenController : MonoBehaviour
         ControlSource kind
     )
     {
+        SpatialWorkspace.LogInteraction("Scan pointer: " + kind + " " + point);
+
         if (!running ||
             source != ControlSource.None ||
             modelRoot == null ||
-            OnButton(point))
+            (kind == ControlSource.Hand ? handOverButton : OnButton(point)))
             return;
 
         bool isHand = kind == ControlSource.Hand;
@@ -1373,16 +1473,25 @@ public class ScanScreenController : MonoBehaviour
             mode = ControlMode.DragRod;
             selectedRod = rodIndex;
 
-            if (dragIcon != null)
+            heldRod = rods[rodIndex].body;
+
+            if (heldRod != null)
             {
-                dragIcon.gameObject.SetActive(true);
+                Vector3 start = handPosition;
 
-                dragIcon.sizeDelta = new Vector2(
-                    100f + rods[rodIndex].length * 140f,
-                    14f
+                if (!isHand)
+                {
+                    Plane plane = new Plane(workspace.transform.forward, workspace.transform.position);
+                    Ray ray = viewCamera.ScreenPointToRay(point);
+
+                    if (plane.Raycast(ray, out float distance))
+                        start = ray.GetPoint(distance);
+                }
+
+                heldRod.BeginGrab(start);
+                heldRod.transform.localScale = new Vector3(
+                    0.018f, rods[rodIndex].length * ModelScale * 0.5f, 0.018f
                 );
-
-                dragIconImage.color = rods[rodIndex].color;
                 UpdateGhost(point);
             }
 
@@ -1395,12 +1504,13 @@ public class ScanScreenController : MonoBehaviour
         if (InTray(point))
             return;
 
-        if (!IsOnStructure(point))
+        if (!IsOnStructure(point, isHand))
             return;
 
         source = kind;
         mode = ControlMode.Rotate;
         previousPointer = point;
+        previousHandPosition = handPosition;
     }
 
     private void MovePointer(
@@ -1422,6 +1532,16 @@ public class ScanScreenController : MonoBehaviour
 
         Vector2 delta = point - previousPointer;
 
+        if (kind == ControlSource.Hand && handHasDepth)
+        {
+            Vector3 movement = handPosition - previousHandPosition;
+            delta = new Vector2(
+                Vector3.Dot(movement, workspace.transform.right),
+                Vector3.Dot(movement, workspace.transform.up)
+            ) / SpatialWorkspace.UIUnit;
+            previousHandPosition = handPosition;
+        }
+
         RotateModelAroundCenter(delta);
 
         previousPointer = point;
@@ -1438,6 +1558,8 @@ public class ScanScreenController : MonoBehaviour
         if (mode == ControlMode.DragRod &&
             selectedRod >= 0)
         {
+            // Use the release pose even when the last HOLD was lost.
+            UpdateGhost(point);
             string edge = ClosestOpenEdge(point);
 
             if (edge == null)
@@ -1461,8 +1583,10 @@ public class ScanScreenController : MonoBehaviour
 
     private void ResetPointer()
     {
-        if (dragIcon != null)
-            dragIcon.gameObject.SetActive(false);
+        if (heldRod != null)
+            heldRod.ReturnHome();
+
+        heldRod = null;
 
         SetHighlight(null);
 
@@ -1495,25 +1619,22 @@ public class ScanScreenController : MonoBehaviour
             lastHandPacketTime = 0f;
         }
 
-        if (Touchscreen.current != null &&
-            (
-                Touchscreen.current.primaryTouch.press.isPressed ||
-                Touchscreen.current.primaryTouch.press.wasReleasedThisFrame
-            ))
+        if (SpatialTouchInput.Read(ref activeTouchId, out Vector2 touchPoint,
+            out TouchPhase touchPhase))
         {
-            var touch = Touchscreen.current.primaryTouch;
-            Vector2 point = touch.position.ReadValue();
-
-            if (touch.press.wasPressedThisFrame)
-                BeginPointer(point, ControlSource.MouseTouch);
-
-            if (touch.press.isPressed)
-                MovePointer(point, ControlSource.MouseTouch);
-
-            if (touch.press.wasReleasedThisFrame)
-                EndPointer(point, ControlSource.MouseTouch);
+            if (touchPhase == TouchPhase.Began)
+                BeginPointer(touchPoint, ControlSource.MouseTouch);
+            else if (touchPhase == TouchPhase.Ended)
+                EndPointer(touchPoint, ControlSource.MouseTouch);
+            else if (touchPhase == TouchPhase.Canceled)
+            {
+                if (source == ControlSource.MouseTouch)
+                    ResetPointer();
+            }
+            else
+                MovePointer(touchPoint, ControlSource.MouseTouch);
         }
-        else if (Mouse.current != null)
+        else if (Mouse.current != null && !PhoneHeadsetDisplay.IsActive)
         {
             Vector2 point = Mouse.current.position.ReadValue();
 
@@ -1533,82 +1654,56 @@ public class ScanScreenController : MonoBehaviour
     // =====================================================
 
     private void ReceiveHands(
-        HandDataReceiver.HandPacket packet
+        SpatialHandInteractor.HandFrame hand
     )
     {
-        if (!running ||
-            packet == null ||
-            packet.hands == null ||
-            packet.coordinate_system != "normalized_image")
+        if (!running || viewCamera == null)
             return;
 
-        HandDataReceiver.HandData hand = null;
-
-        if (!string.IsNullOrEmpty(activeHandName))
-        {
-            foreach (
-                HandDataReceiver.HandData candidate
-                in packet.hands
-            )
-            {
-                if (candidate != null &&
-                    candidate.hand == activeHandName)
-                {
-                    hand = candidate;
-                    break;
-                }
-            }
-        }
-        else
-        {
-            foreach (
-                HandDataReceiver.HandData candidate
-                in packet.hands
-            )
-            {
-                if (candidate != null &&
-                    candidate.interaction != null)
-                {
-                    hand = candidate;
-                    break;
-                }
-            }
-        }
-
-        if (hand == null || hand.interaction == null)
+        if (!string.IsNullOrEmpty(activeHandName) && activeHandName != hand.hand)
             return;
 
-        Vector2 point = new Vector2(
-            Mathf.Clamp01(hand.interaction.x) * Screen.width,
-            (1f - Mathf.Clamp01(hand.interaction.y)) * Screen.height
-        );
+        handPosition = hand.position;
+        handHasDepth = hand.hasDepth;
+        handOverButton = hand.overButton;
+        Vector3 projected = viewCamera.WorldToScreenPoint(handPosition);
+
+        if (projected.z <= 0f)
+        {
+            CancelHandInteraction();
+            return;
+        }
+
+        Vector2 point = new Vector2(projected.x, projected.y);
 
         lastHandPacketTime = Time.unscaledTime;
 
-        if (hand.gesture == "PINCH_START")
-        {
-            if (string.IsNullOrEmpty(activeHandName))
-                activeHandName = hand.hand;
-
-            if (activeHandName == hand.hand)
-                BeginPointer(point, ControlSource.Hand);
-        }
-        else if (hand.gesture == "PINCH_HOLD" &&
-                 activeHandName == hand.hand)
+        if (hand.gesture == "PINCH_START" || hand.gesture == "PINCH_HOLD")
         {
             if (source == ControlSource.None)
                 BeginPointer(point, ControlSource.Hand);
             else if (source == ControlSource.Hand)
                 MovePointer(point, ControlSource.Hand);
+
+            if (source == ControlSource.Hand)
+                activeHandName = hand.hand;
         }
-        else if (hand.gesture == "PINCH_END" &&
-                 activeHandName == hand.hand)
+        else if (hand.gesture == "PINCH_END" || hand.gesture == "OPEN")
         {
             if (source == ControlSource.Hand)
                 EndPointer(point, ControlSource.Hand);
 
             activeHandName = null;
         }
+    }
+
+    private void CancelHandInteraction()
+    {
+        if (source == ControlSource.Hand)
+            ResetPointer();
+
+        activeHandName = null;
+        lastHandPacketTime = 0f;
     }
 
     // =====================================================
@@ -1828,6 +1923,8 @@ public class ScanScreenController : MonoBehaviour
 
     private void ClearModel()
     {
+        ResetPointer();
+
         if (modelRoot != null)
             Destroy(modelRoot);
 
@@ -1844,9 +1941,6 @@ public class ScanScreenController : MonoBehaviour
         guides.Clear();
         installed.Clear();
         rodTypeByEdge.Clear();
-
-        if (dragIcon != null)
-            dragIcon.gameObject.SetActive(false);
 
         lastHandPacketTime = 0f;
         activeHandName = null;

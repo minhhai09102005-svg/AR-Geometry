@@ -6,6 +6,7 @@ using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.XR.ARFoundation;
@@ -24,12 +25,33 @@ public class HandDataReceiver : MonoBehaviour
     }
 
     [Serializable]
+    public class SpatialPoint
+    {
+        public float x;
+        public float y;
+        public float z;
+    }
+
+    [Serializable]
+    public class SpatialData
+    {
+        public bool valid;
+        public string coordinate_system;
+        public bool estimated;
+        public SpatialPoint point;
+        public SpatialPoint index_tip;
+        public SpatialPoint[] landmarks;
+        public int camera_frame_id;
+    }
+
+    [Serializable]
     public class HandData
     {
         public string hand;
         public string gesture;
         public InteractionData interaction;
         public float pinch_ratio;
+        public SpatialData spatial;
     }
 
     [Serializable]
@@ -39,6 +61,7 @@ public class HandDataReceiver : MonoBehaviour
         public string source;
         public int frame_id;
         public string coordinate_system;
+        public string camera_source;
         public HandData[] hands;
     }
 
@@ -63,7 +86,8 @@ public class HandDataReceiver : MonoBehaviour
 
     private static HandDataReceiver instance;
 
-    private const string HOST = "127.0.0.1";
+    // Set this to the laptop's Wi-Fi IPv4 address before building the APK.
+    private const string HOST = "192.168.1.9";
     private const int PORT = 5053;
 
     private readonly object socketLock = new object();
@@ -123,6 +147,8 @@ public class HandDataReceiver : MonoBehaviour
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
         StartHiddenBackend();
 #endif
+
+        PhoneCameraSender.Ensure();
 
         networkThread = new Thread(NetworkLoop);
         networkThread.IsBackground = true;
@@ -196,7 +222,7 @@ public class HandDataReceiver : MonoBehaviour
                 if (File.Exists(candidate))
                 {
                     executable = candidate;
-                    arguments = "\"" + script + "\"";
+                    arguments = "\"" + script + "\" --camera-source webcam";
                     workingDirectory = root;
                     break;
                 }
@@ -275,12 +301,30 @@ public class HandDataReceiver : MonoBehaviour
                 current = new TcpClient();
                 current.NoDelay = true;
 
-                current.Connect(HOST, PORT);
+                Task connection = current.ConnectAsync(HOST, PORT);
+
+                if (!connection.Wait(3000))
+                {
+                    // Closing the socket below may fault the pending task.
+                    // Observe that failure without disposing its wait handle.
+                    connection.ContinueWith(
+                        task => { var ignored = task.Exception; },
+                        TaskContinuationOptions.OnlyOnFaulted
+                    );
+                    throw new SocketException((int)SocketError.TimedOut);
+                }
+
+                if (!running)
+                    break;
 
                 lock (socketLock)
                 {
                     tcpClient = current;
                     stream = current.GetStream();
+                    // Hand packets arrive even when no hands are visible.
+                    // A silent Wi-Fi connection must reconnect, not wait forever.
+                    stream.ReadTimeout = 10000;
+                    stream.WriteTimeout = 1500;
                     connected = true;
                 }
 
@@ -322,6 +366,11 @@ public class HandDataReceiver : MonoBehaviour
                 }
             }
             catch (SocketException)
+            {
+            }
+            catch (AggregateException error) when (
+                error.InnerException is SocketException ||
+                error.InnerException is ObjectDisposedException)
             {
             }
             catch (IOException)
@@ -412,12 +461,19 @@ public class HandDataReceiver : MonoBehaviour
                 {
                     case "role1_camera":
 
+#if UNITY_ANDROID && !UNITY_EDITOR
+                        // ARCore supplies the phone's camera background.
+                        // Do not cover it with the laptop webcam stream.
+                        break;
+#else
+
                         if (!string.IsNullOrEmpty(envelope.jpeg))
                         {
                             ShowCameraFrame(envelope.jpeg);
                         }
 
                         break;
+#endif
 
                     case "role1_hand_tracking":
 
@@ -431,6 +487,10 @@ public class HandDataReceiver : MonoBehaviour
                             handPacket.hands != null
                         )
                         {
+#if UNITY_ANDROID && !UNITY_EDITOR
+                            if (handPacket.camera_source != "phone_rear")
+                                break;
+#endif
                             PacketReceived?.Invoke(handPacket);
                         }
 
@@ -703,6 +763,14 @@ public class HandDataReceiver : MonoBehaviour
     {
         return instance != null &&
                instance.SendLine(json);
+    }
+
+    public static Task<bool> SendPhoneCameraJsonAsync(string json)
+    {
+        HandDataReceiver receiver = instance;
+        if (receiver == null)
+            return Task.FromResult(false);
+        return Task.Run(() => receiver.SendLine(json));
     }
 
     private bool SendLine(string json)

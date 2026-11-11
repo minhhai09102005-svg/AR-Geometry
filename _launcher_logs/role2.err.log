@@ -1,0 +1,9 @@
+Exception in thread Thread-1 (role1_udp_loop):
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Users\admin\SmartGeoAR\role2_geometry_reasoning\main.py", line 242, in role1_udp_loop
+    udp.bind((HOST, ROLE1_UDP_PORT))
+OSError: [WinError 10048] Only one usage of each socket address (protocol/network address/port) is normally permitted

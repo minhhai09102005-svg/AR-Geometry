@@ -195,10 +195,11 @@ def make_hand_data(
     gesture,
     x,
     y,
-    ratio
+    ratio,
+    spatial=None
 ):
 
-    return {
+    data = {
         "hand": hand_name,
         "gesture": gesture,
         "interaction": {
@@ -207,6 +208,12 @@ def make_hand_data(
         },
         "pinch_ratio": round(float(ratio), 4)
     }
+
+    # Optional extension; the existing normalized-image contract stays valid.
+    if spatial is not None:
+        data["spatial"] = spatial
+
+    return data
 
 
 # ==========================================

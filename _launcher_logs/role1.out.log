@@ -1,0 +1,350 @@
+ROLE 1 -> UNITY: UDP 127.0.0.1:5052
+Q: Quit
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 0,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 30,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 60,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 90,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 120,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 150,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 180,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 210,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 240,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 270,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 300,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "OPEN",
+      "interaction": {
+        "x": 0.3396,
+        "y": 0.5239
+      },
+      "pinch_ratio": 1.3632
+    }
+  ]
+}
+Frame 310 | Right | PINCH_START | ratio=0.11
+Frame 316 | Right | PINCH_END (TRACKING LOST)
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 330,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 360,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 390,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 420,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+Frame 428 | Left | PINCH_START | ratio=0.12
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 450,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.1672,
+        "y": 0.6092
+      },
+      "pinch_ratio": 0.0999
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 480,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.1552,
+        "y": 0.6009
+      },
+      "pinch_ratio": 0.0175
+    }
+  ]
+}
+Frame 493 | Left | PINCH_END | ratio=1.12
+Frame 509 | Left | PINCH_START | ratio=0.27
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 510,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.0778,
+        "y": 0.5369
+      },
+      "pinch_ratio": 0.5294
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 540,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.1411,
+        "y": 0.6143
+      },
+      "pinch_ratio": 0.1991
+    }
+  ]
+}
+Frame 561 | Left | PINCH_END (TRACKING LOST)
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 570,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 600,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Right",
+      "gesture": "OPEN",
+      "interaction": {
+        "x": 0.5871,
+        "y": 0.5571
+      },
+      "pinch_ratio": 0.9393
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 630,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 660,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 690,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 720,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 750,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 780,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 810,
+  "coordinate_system": "normalized_image",
+  "hands": []
+}
+Frame 821 | Left | PINCH_START | ratio=0.25
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 840,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.3254,
+        "y": 0.6009
+      },
+      "pinch_ratio": 0.1782
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 870,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.3979,
+        "y": 0.7533
+      },
+      "pinch_ratio": 0.1383
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 900,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.4228,
+        "y": 0.7493
+      },
+      "pinch_ratio": 0.1923
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 930,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.4281,
+        "y": 0.7067
+      },
+      "pinch_ratio": 0.2556
+    }
+  ]
+}
+{
+  "version": "1.0",
+  "source": "role1_hand_tracking",
+  "frame_id": 960,
+  "coordinate_system": "normalized_image",
+  "hands": [
+    {
+      "hand": "Left",
+      "gesture": "PINCH_HOLD",
+      "interaction": {
+        "x": 0.4434,
+        "y": 0.8147
+      },
+      "pinch_ratio": 0.279
+    }
+  ]
+}
