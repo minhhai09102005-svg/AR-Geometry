@@ -1,3 +1,4 @@
+
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
@@ -41,6 +42,12 @@ public class MockVertexOverlay : MonoBehaviour
             "A", "B", "C", "D",
             "E", "F", "G", "H"
         };
+
+        // Hinh chop su dung dinh S, khong phai E
+        if (GameSession.SelectedShape == ShapeType.SquarePyramid)
+        {
+            names[4] = "S";
+        }
 
         Vector2[] positions =
         {

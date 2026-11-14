@@ -1,2 +1,23 @@
+# Python caches and local environments
 **/__pycache__/
 *.pyc
+**/.venv/
+.venv-cv/
+
+# Unity generated files
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/*_BackUpThisFolder_ButDontShipItWithYourGame/
+
+# Local tools and secrets
+**/node_modules/
+**/.vs/
+**/.env
+
+# PC runtime artifacts
+_launcher_logs/

@@ -256,7 +256,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "< QUAY L\u1EA0I"
+  m_text: < QUAY LAI
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -837,7 +837,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "H\xCCNH H\u1ED8P CH\u1EEE NH\u1EACT"
+  m_text: HINH HOP CHU NHAT
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -1107,7 +1107,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "H\xCCNH L\u1EACP PH\u01AF\u01A0NG"
+  m_text: HINH LAP PHUONG
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -1457,7 +1457,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "H\u01AF\u1EDANG D\u1EAAN - H\xCCNH L\u1EACP PH\u01AF\u01A0NG"
+  m_text: HUONG DAN - HINH LAP PHUONG
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -1731,7 +1731,9 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "H\u1ECCC H\xCCNH H\u1ECCC KH\xD4NG GIAN\r\nB\u1EB0NG TH\u1EF0C T\u1EBE T\u0102NG C\u01AF\u1EDCNG"
+  m_text: 'HOC HINH HOC KHONG GIAN
+
+    BANG THUC TE TANG CUONG'
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -2213,7 +2215,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "CH\u1ECCN H\xCCNH H\u1ECCC"
+  m_text: CHON HINH HOC
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -2350,7 +2352,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "B\u1EAET \u0110\u1EA6U H\u1ECCC"
+  m_text: BAT DAU HOC
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -2487,7 +2489,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Quan s\xE1t \u2022 L\u1EAFp r\xE1p \u2022 Ki\u1EC3m tra b\u1EB1ng AR"
+  m_text: Quan sat - Lap rap - Kiem tra bang AR
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -2624,7 +2626,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "QUAY L\u1EA0I"
+  m_text: QUAY LAI
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -2894,7 +2896,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "H\xCCNH CH\xD3P T\u1EE8 GI\xC1C \u0110\u1EC0U"
+  m_text: HINH CHOP TU GIAC DEU
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
@@ -3329,6 +3331,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1869841938}
   - component: {fileID: 1869841937}
+  - component: {fileID: 1869841939}
   m_Layer: 0
   m_Name: MainMenuManager
   m_TagString: Untagged
@@ -3368,6 +3371,18 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1869841939
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1869841936}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c93a19ed05c7e0645a787e5b6bfa00e5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ShapeDropFeature
 --- !u!1 &1950364559
 GameObject:
   m_ObjectHideFlags: 0
@@ -3562,7 +3577,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "\r\u2022 \u0110\u1EB7t camera trong v\xF9ng c\xF3 m\u1EB7t ph\u1EB3ng.\n\r\n\u2022 Gi\u1EEF \u0111i\u1EC7n tho\u1EA1i \u1ED5n \u0111\u1ECBnh khi qu\xE9t.\r\n\r\n\u2022 Nh\u1EA5n \"B\u1EAFt \u0111\u1EA7u qu\xE9t\" khi s\u1EB5n s\xE0ng."
+  m_text: "\r- Dat camera trong vung co mat phang.\n\r\n- Giu dien thoai on dinh khi quet.\r\n\r\n- Nhan \"Bat dau quet\" khi san sang."
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
